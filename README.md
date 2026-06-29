@@ -1,6 +1,8 @@
 <div align="center">
 
-# 🦗 Cicada
+<img src="assets/cicada-logo.svg" alt="Cicada logo" width="120" height="120" />
+
+# Cicada
 
 **An agentic Python IDE that turns plain-English requests into runnable, executed code — powered entirely by a local model.**
 
