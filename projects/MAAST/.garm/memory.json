@@ -1,0 +1,47 @@
+{
+  "summary": "use real maast dataset to render an sataelig data and image reander ( no sysnthtc data or fake data) use real mast data",
+  "facts": [],
+  "events": [
+    {
+      "t": "2026-06-27T19:14:56.746Z",
+      "kind": "create",
+      "text": "Built 8-file project for: use real maast dataset to render an sataelig data and image reander ( no sysnthtc data or fake data) use real mast data (entry: main.py)"
+    },
+    {
+      "t": "2026-06-27T19:16:20.225Z",
+      "kind": "run",
+      "text": "Project exits with code 1 — requests.exceptions.HTTPError: 404 Client Error: Not Found for url: https://hla.stsci.edu/cgi-bin/hla?target=M51&size=256&format=jpeg"
+    },
+    {
+      "t": "2026-06-27T19:16:59.578Z",
+      "kind": "inpaint",
+      "text": "Edited lines 7–8: use a tested url,this wont work (runs)"
+    },
+    {
+      "t": "2026-06-27T19:18:26.466Z",
+      "kind": "refine",
+      "text": "Change applied to project: The URL isn't working because the Hubble Legacy Archive (HLA) interface has been officially retired. As of 2025, HLA image cutouts, footprint viewing, and the cart system were phased out in fa…"
+    },
+    {
+      "t": "2026-06-27T19:19:40.797Z",
+      "kind": "refine",
+      "text": "Change applied to project: HTTP Error 404.0 - Not Found The resource you are looking for has been removed, had its name changed, or is temporarily unavailable. Most likely causes: The directory or file specified does no…"
+    },
+    {
+      "t": "2026-06-27T19:20:33.026Z",
+      "kind": "run",
+      "text": "Project exits with code 1 — requests.exceptions.HTTPError: 404 Client Error: Not Found for url: https://mast.stsci.edu/cutout/v0.1/hst?target=M51&width=256&height=256&format=jpeg"
+    },
+    {
+      "t": "2026-06-27T19:21:35.720Z",
+      "kind": "refine",
+      "text": "Change applied to project: https://mast.stsci.edu/api/v0/"
+    },
+    {
+      "t": "2026-06-27T19:22:10.991Z",
+      "kind": "run",
+      "text": "Project exits with code 1 — requests.exceptions.HTTPError: 404 Client Error: Not Found for url: https://mast.stsci.edu/api/v0/download/sync?objectname=M51&width=256&height=256&format=jpg"
+    }
+  ],
+  "updatedAt": "2026-06-27T19:22:10.991Z"
+}

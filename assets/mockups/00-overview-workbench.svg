@@ -1,0 +1,139 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="800" viewBox="0 0 1280 800" font-family="Inter, -apple-system, 'Segoe UI', sans-serif">
+  <defs>
+    <path id="garm-d" fill-rule="evenodd" d="M 66.54 24.28 A 69.28 69.28 0 0 1 94.20 72.20 A 11.00 11.00 0 0 1 87.66 83.52 A 69.28 69.28 0 0 1 32.34 83.52 A 11.00 11.00 0 0 1 25.80 72.20 A 69.28 69.28 0 0 1 53.46 24.28 A 11.00 11.00 0 0 1 66.54 24.28 Z M 63.25 41.62 A 35.51 35.51 0 0 1 77.54 66.37 A 5.50 5.50 0 0 1 74.29 72.01 A 35.51 35.51 0 0 1 45.71 72.01 A 5.50 5.50 0 0 1 42.46 66.37 A 35.51 35.51 0 0 1 56.75 41.62 A 5.50 5.50 0 0 1 63.25 41.62 Z"/>
+    <linearGradient id="g1" x1="20" y1="16" x2="100" y2="104" gradientUnits="userSpaceOnUse"><stop offset="0%" stop-color="#D9FFFB"/><stop offset="18%" stop-color="#5CFFF2"/><stop offset="42%" stop-color="#00B8FF"/><stop offset="70%" stop-color="#005BFF"/><stop offset="100%" stop-color="#02091A"/></linearGradient>
+    <linearGradient id="g2" x1="20" y1="16" x2="100" y2="104" gradientUnits="userSpaceOnUse"><stop offset="0%" stop-color="#BFDFFF"/><stop offset="20%" stop-color="#5A9DFF"/><stop offset="44%" stop-color="#185CFF"/><stop offset="70%" stop-color="#1026A8"/><stop offset="100%" stop-color="#030516"/></linearGradient>
+    <linearGradient id="g3" x1="20" y1="16" x2="100" y2="104" gradientUnits="userSpaceOnUse"><stop offset="0%" stop-color="#E2D6FF"/><stop offset="20%" stop-color="#8C7CFF"/><stop offset="44%" stop-color="#4B4DFF"/><stop offset="70%" stop-color="#2220B8"/><stop offset="100%" stop-color="#060018"/></linearGradient>
+    <linearGradient id="g4" x1="20" y1="16" x2="100" y2="104" gradientUnits="userSpaceOnUse"><stop offset="0%" stop-color="#D6FFF2"/><stop offset="22%" stop-color="#58FFD6"/><stop offset="46%" stop-color="#00BFA5"/><stop offset="72%" stop-color="#005D70"/><stop offset="100%" stop-color="#021112"/></linearGradient>
+    <linearGradient id="g5" x1="20" y1="16" x2="100" y2="104" gradientUnits="userSpaceOnUse"><stop offset="0%" stop-color="#B8F4FF"/><stop offset="20%" stop-color="#38D6FF"/><stop offset="42%" stop-color="#276BFF"/><stop offset="68%" stop-color="#7A3CFF"/><stop offset="100%" stop-color="#070014"/></linearGradient>
+    <symbol id="mark" viewBox="0 0 120 120"><use href="#garm-d" fill="currentColor"/></symbol>
+    <symbol id="lv1" viewBox="0 0 120 120"><use href="#garm-d" fill="url(#g1)"/></symbol>
+    <symbol id="lv2" viewBox="0 0 120 120"><use href="#garm-d" fill="url(#g2)"/></symbol>
+    <symbol id="lv3" viewBox="0 0 120 120"><use href="#garm-d" fill="url(#g3)"/></symbol>
+    <symbol id="lv4" viewBox="0 0 120 120"><use href="#garm-d" fill="url(#g4)"/></symbol>
+    <symbol id="lv5" viewBox="0 0 120 120"><use href="#garm-d" fill="url(#g5)"/></symbol>
+    <symbol id="flower" viewBox="0 0 120 120">
+      <g transform="rotate(0 60 60)"><use href="#lv1" x="32" y="4" width="56" height="56"/></g>
+      <g transform="rotate(60 60 60)"><use href="#lv2" x="32" y="4" width="56" height="56"/></g>
+      <g transform="rotate(120 60 60)"><use href="#lv3" x="32" y="4" width="56" height="56"/></g>
+      <g transform="rotate(180 60 60)"><use href="#lv4" x="32" y="4" width="56" height="56"/></g>
+      <g transform="rotate(240 60 60)"><use href="#lv5" x="32" y="4" width="56" height="56"/></g>
+      <g transform="rotate(300 60 60)"><use href="#mark" x="32" y="4" width="56" height="56" color="#f4f4f7"/></g>
+    </symbol>
+  </defs>
+
+  <rect width="1280" height="800" fill="#050506"/>
+
+  <!-- ============ TOP BAR ============ -->
+  <rect width="1280" height="52" fill="#0a0a0c"/>
+  <line x1="0" y1="52" x2="1280" y2="52" stroke="#ffffff" stroke-opacity="0.08"/>
+  <circle cx="22" cy="26" r="6" fill="#ff5f57"/><circle cx="42" cy="26" r="6" fill="#febc2e"/><circle cx="62" cy="26" r="6" fill="#28c840"/>
+  <use href="#flower" x="90" y="12" width="28" height="28"/>
+  <text x="128" y="22" font-size="15" font-weight="620" letter-spacing="-0.02em" fill="#f5f5f7">Cicada</text>
+  <text x="128" y="38" font-size="11" fill="#f5f5f7" fill-opacity="0.34">Python Agentic IDE</text>
+  <rect x="936" y="14" width="112" height="24" rx="12" fill="#0c0c0f" stroke="#ffffff" stroke-opacity="0.08"/>
+  <circle cx="952" cy="26" r="3.5" fill="#fbbf24"/><text x="964" y="30" font-size="12" fill="#f5f5f7" fill-opacity="0.6">Initializing</text>
+  <rect x="1060" y="14" width="96" height="24" rx="8" fill="#0c0c0f" stroke="#ffffff" stroke-opacity="0.08"/>
+  <text x="1076" y="30" font-size="12" fill="#f5f5f7">project</text>
+  <path d="M1140 24l4 4 4-4" fill="none" stroke="#f5f5f7" stroke-opacity="0.5" stroke-width="1.4" stroke-linecap="round"/>
+  <rect x="1168" y="14" width="28" height="24" rx="8" fill="#0c0c0f" stroke="#ffffff" stroke-opacity="0.08"/>
+  <path d="M1182 21v10M1177 26h10" stroke="#f5f5f7" stroke-opacity="0.7" stroke-width="1.6" stroke-linecap="round"/>
+  <circle cx="1226" cy="26" r="6" fill="none" stroke="#f5f5f7" stroke-opacity="0.55" stroke-width="1.6"/><circle cx="1226" cy="26" r="2" fill="#f5f5f7" fill-opacity="0.55"/>
+
+  <!-- ============ AGENT PIPELINE (left sidebar) ============ -->
+  <line x1="392" y1="52" x2="392" y2="800" stroke="#ffffff" stroke-opacity="0.08"/>
+  <text x="16" y="84" font-size="12.5" font-weight="600" fill="#f5f5f7">Agent Pipeline</text>
+  <rect x="16" y="96" width="360" height="62" rx="11" fill="#08080a" stroke="#ffffff" stroke-opacity="0.1"/>
+  <text x="28" y="120" font-size="12" fill="#f5f5f7" fill-opacity="0.34">Describe the Python program you want —</text>
+  <text x="28" y="138" font-size="12" fill="#f5f5f7" fill-opacity="0.34">“plot the average of each numeric column.”</text>
+  <rect x="16" y="170" width="250" height="32" rx="9" fill="#f5f5f7"/><text x="141" y="191" text-anchor="middle" font-size="12.5" font-weight="600" fill="#08080a">Run Pipeline</text>
+  <rect x="274" y="170" width="102" height="32" rx="9" fill="none" stroke="#ffffff" stroke-opacity="0.14"/><text x="325" y="191" text-anchor="middle" font-size="12" fill="#f5f5f7" fill-opacity="0.6">Cancel</text>
+
+  <!-- stage cards (condensed) -->
+  <g font-size="13" font-weight="580">
+    <!-- evaluate done -->
+    <rect x="16" y="222" width="360" height="38" rx="11" fill="#0c0c0f" stroke="#ffffff" stroke-opacity="0.08"/>
+    <use href="#mark" x="28" y="230" width="22" height="22" color="#4ade80"/><text x="60" y="245" fill="#f5f5f7">Evaluate</text>
+    <text x="360" y="245" text-anchor="end" font-size="9.5" font-weight="600" letter-spacing="0.07em" fill="#4ade80">DONE</text>
+    <!-- system design done -->
+    <rect x="16" y="268" width="360" height="38" rx="11" fill="#0c0c0f" stroke="#ffffff" stroke-opacity="0.08"/>
+    <use href="#lv1" x="28" y="276" width="22" height="22"/><text x="60" y="291" fill="#f5f5f7">System Design</text>
+    <text x="360" y="291" text-anchor="end" font-size="9.5" font-weight="600" letter-spacing="0.07em" fill="#4ade80">DONE</text>
+    <!-- generate running -->
+    <rect x="16" y="314" width="360" height="38" rx="11" fill="#0c0c0f" stroke="#ffffff" stroke-opacity="0.18"/>
+    <use href="#lv2" x="28" y="322" width="22" height="22"/><text x="60" y="337" fill="#f5f5f7">Generate Code</text>
+    <text x="360" y="337" text-anchor="end" font-size="9.5" font-weight="600" letter-spacing="0.07em" fill="#f5f5f7">RUNNING</text>
+    <!-- review pending -->
+    <g opacity="0.55"><rect x="16" y="360" width="360" height="38" rx="11" fill="#0c0c0f" stroke="#ffffff" stroke-opacity="0.08"/>
+    <use href="#lv3" x="28" y="368" width="22" height="22"/><text x="60" y="383" fill="#f5f5f7">Review</text>
+    <text x="360" y="383" text-anchor="end" font-size="9.5" font-weight="600" letter-spacing="0.07em" fill="#f5f5f7" fill-opacity="0.34">PENDING</text></g>
+    <!-- fix pending -->
+    <g opacity="0.55"><rect x="16" y="406" width="360" height="38" rx="11" fill="#0c0c0f" stroke="#ffffff" stroke-opacity="0.08"/>
+    <use href="#lv4" x="28" y="414" width="22" height="22"/><text x="60" y="429" fill="#f5f5f7">Fix &amp; Compile</text>
+    <text x="360" y="429" text-anchor="end" font-size="9.5" font-weight="600" letter-spacing="0.07em" fill="#f5f5f7" fill-opacity="0.34">PENDING</text></g>
+    <!-- run pending -->
+    <g opacity="0.55"><rect x="16" y="452" width="360" height="38" rx="11" fill="#0c0c0f" stroke="#ffffff" stroke-opacity="0.08"/>
+    <use href="#lv5" x="28" y="460" width="22" height="22"/><text x="60" y="475" fill="#f5f5f7">Run &amp; Render</text>
+    <text x="360" y="475" text-anchor="end" font-size="9.5" font-weight="600" letter-spacing="0.07em" fill="#f5f5f7" fill-opacity="0.34">PENDING</text></g>
+  </g>
+  <rect x="16" y="510" width="360" height="32" rx="9" fill="#08080a" stroke="#ffffff" stroke-opacity="0.1"/>
+  <text x="28" y="531" font-size="12" fill="#f5f5f7" fill-opacity="0.34">Iterate on the code — ask for a change…</text>
+
+  <!-- ============ EXPLORER ============ -->
+  <line x1="602" y1="52" x2="602" y2="510" stroke="#ffffff" stroke-opacity="0.08"/>
+  <text x="408" y="80" font-size="10.5" font-weight="600" letter-spacing="1.6" fill="#f5f5f7" fill-opacity="0.34">EXPLORER</text>
+  <g font-size="12.5">
+    <text x="408" y="112" fill="#f5f5f7" fill-opacity="0.5">▾</text><text x="424" y="112" fill="#f5f5f7" fill-opacity="0.82">models</text>
+    <text x="426" y="136" fill="#f5f5f7" fill-opacity="0.34">·</text><text x="440" y="136" fill="#f5f5f7" fill-opacity="0.7">net.py</text>
+    <rect x="404" y="146" width="190" height="24" rx="6" fill="#ffffff" fill-opacity="0.06"/>
+    <text x="426" y="162" fill="#f5f5f7" fill-opacity="0.34">·</text><text x="440" y="162" fill="#f5f5f7" font-weight="500">train.py</text>
+    <text x="426" y="188" fill="#f5f5f7" fill-opacity="0.34">·</text><text x="440" y="188" fill="#f5f5f7" fill-opacity="0.7">data.csv</text>
+    <text x="410" y="216" fill="#f5f5f7" fill-opacity="0.34">·</text><text x="424" y="216" fill="#f5f5f7" fill-opacity="0.82">main.py</text>
+    <text x="410" y="242" fill="#f5f5f7" fill-opacity="0.34">·</text><text x="424" y="242" fill="#f5f5f7" fill-opacity="0.82">README.md</text>
+    <text x="408" y="268" fill="#f5f5f7" fill-opacity="0.5">▸</text><text x="424" y="268" fill="#f5f5f7" fill-opacity="0.82">outputs</text>
+  </g>
+
+  <!-- ============ EDITOR ============ -->
+  <rect x="602" y="52" width="678" height="40" fill="#0a0a0c"/>
+  <line x1="602" y1="92" x2="1280" y2="92" stroke="#ffffff" stroke-opacity="0.08"/>
+  <rect x="616" y="60" width="84" height="24" rx="7" fill="#16161a" stroke="#ffffff" stroke-opacity="0.14"/><text x="658" y="76" text-anchor="middle" font-size="12" fill="#f5f5f7">main.py</text>
+  <g font-size="11.5" text-anchor="middle"><text x="1090" y="76" fill="#f5f5f7" fill-opacity="0.55">Compile</text><rect x="1124" y="62" width="44" height="22" rx="7" fill="#f5f5f7"/><text x="1146" y="77" fill="#08080a" font-weight="600">Run</text><text x="1206" y="76" fill="#f5f5f7" fill-opacity="0.55">Save</text></g>
+  <rect x="602" y="92" width="44" height="418" fill="#070709"/>
+  <g font-family="'SF Mono', ui-monospace, Menlo, monospace" font-size="12.5">
+    <g fill="#f5f5f7" fill-opacity="0.26" text-anchor="end"><text x="636" y="122">1</text><text x="636" y="146">2</text><text x="636" y="170">3</text><text x="636" y="194">4</text><text x="636" y="218">5</text><text x="636" y="242">6</text><text x="636" y="266">7</text><text x="636" y="290">8</text><text x="636" y="314">9</text></g>
+    <g xml:space="preserve" fill="#d6d6db">
+      <text x="660" y="122"><tspan fill="#c792ea">import</tspan> torch</text>
+      <text x="660" y="146"><tspan fill="#c792ea">import</tspan> pandas <tspan fill="#c792ea">as</tspan> pd</text>
+      <text x="660" y="194" fill="#6b7280"># load data, move to the active device</text>
+      <text x="660" y="218"><tspan fill="#c792ea">def</tspan> <tspan fill="#82aaff">load_data</tspan>(url, device):</text>
+      <text x="660" y="242">    df = pd.<tspan fill="#82aaff">read_csv</tspan>(url)</text>
+      <text x="660" y="266">    <tspan fill="#c792ea">return</tspan> torch.<tspan fill="#82aaff">tensor</tspan>(df.values).to(device)</text>
+      <text x="660" y="314"><tspan fill="#c792ea">class</tspan> <tspan fill="#ffcb6b">MLP</tspan>(nn.Module):</text>
+    </g>
+  </g>
+
+  <!-- ============ DOCK ============ -->
+  <line x1="392" y1="510" x2="1280" y2="510" stroke="#ffffff" stroke-opacity="0.08"/>
+  <rect x="392" y="510" width="888" height="40" fill="#070709"/>
+  <line x1="392" y1="550" x2="1280" y2="550" stroke="#ffffff" stroke-opacity="0.08"/>
+  <g font-size="12.5">
+    <text x="412" y="535" fill="#f5f5f7" font-weight="560">Console</text><rect x="412" y="544" width="54" height="2.5" rx="1.25" fill="#f5f5f7"/>
+    <text x="488" y="535" fill="#f5f5f7" fill-opacity="0.5">Render</text>
+    <text x="558" y="535" fill="#f5f5f7" fill-opacity="0.5">Data</text>
+    <text x="616" y="535" fill="#f5f5f7" fill-opacity="0.5">Terminal</text>
+    <text x="696" y="535" fill="#f5f5f7" fill-opacity="0.5">Memory</text>
+    <text x="776" y="535" fill="#f5f5f7" fill-opacity="0.5">Env</text>
+    <text x="814" y="535" fill="#f5f5f7" fill-opacity="0.5">Problems</text>
+    <use href="#flower" x="896" y="517" width="16" height="16"/><text x="917" y="535" fill="#f5f5f7" fill-opacity="0.5">Chat</text>
+  </g>
+  <g font-family="'SF Mono', ui-monospace, Menlo, monospace" font-size="12.5">
+    <text x="412" y="584" fill="#f5f5f7" fill-opacity="0.7">Using device: cpu</text>
+    <text x="412" y="608" fill="#f5f5f7" fill-opacity="0.7">Loaded iris.csv &#8594; (150, 5)</text>
+    <text x="412" y="632" fill="#f5f5f7" fill-opacity="0.7">Epoch 3/5   loss 0.448</text>
+    <text x="412" y="656" fill="#4ade80">&#10003; run finished in 2.3s · 1 figure rendered</text>
+  </g>
+  <line x1="392" y1="752" x2="1280" y2="752" stroke="#ffffff" stroke-opacity="0.08"/>
+  <text x="412" y="778" font-family="'SF Mono', ui-monospace, Menlo, monospace" font-size="11" fill="#f5f5f7" fill-opacity="0.6">stdin</text>
+  <rect x="456" y="764" width="808" height="22" rx="7" fill="#08080a" stroke="#ffffff" stroke-opacity="0.08"/>
+  <text x="468" y="779" font-size="11" fill="#f5f5f7" fill-opacity="0.34">Send input to the running program, press Enter</text>
+</svg>

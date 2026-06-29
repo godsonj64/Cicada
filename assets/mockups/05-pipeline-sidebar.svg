@@ -1,0 +1,99 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="392" height="772" viewBox="0 0 392 772" font-family="Inter, -apple-system, 'Segoe UI', sans-serif">
+  <defs>
+    <path id="garm-d" fill-rule="evenodd" d="M 66.54 24.28 A 69.28 69.28 0 0 1 94.20 72.20 A 11.00 11.00 0 0 1 87.66 83.52 A 69.28 69.28 0 0 1 32.34 83.52 A 11.00 11.00 0 0 1 25.80 72.20 A 69.28 69.28 0 0 1 53.46 24.28 A 11.00 11.00 0 0 1 66.54 24.28 Z M 63.25 41.62 A 35.51 35.51 0 0 1 77.54 66.37 A 5.50 5.50 0 0 1 74.29 72.01 A 35.51 35.51 0 0 1 45.71 72.01 A 5.50 5.50 0 0 1 42.46 66.37 A 35.51 35.51 0 0 1 56.75 41.62 A 5.50 5.50 0 0 1 63.25 41.62 Z"/>
+    <linearGradient id="g1" x1="20" y1="16" x2="100" y2="104" gradientUnits="userSpaceOnUse"><stop offset="0%" stop-color="#D9FFFB"/><stop offset="18%" stop-color="#5CFFF2"/><stop offset="42%" stop-color="#00B8FF"/><stop offset="70%" stop-color="#005BFF"/><stop offset="100%" stop-color="#02091A"/></linearGradient>
+    <linearGradient id="g2" x1="20" y1="16" x2="100" y2="104" gradientUnits="userSpaceOnUse"><stop offset="0%" stop-color="#BFDFFF"/><stop offset="20%" stop-color="#5A9DFF"/><stop offset="44%" stop-color="#185CFF"/><stop offset="70%" stop-color="#1026A8"/><stop offset="100%" stop-color="#030516"/></linearGradient>
+    <linearGradient id="g3" x1="20" y1="16" x2="100" y2="104" gradientUnits="userSpaceOnUse"><stop offset="0%" stop-color="#E2D6FF"/><stop offset="20%" stop-color="#8C7CFF"/><stop offset="44%" stop-color="#4B4DFF"/><stop offset="70%" stop-color="#2220B8"/><stop offset="100%" stop-color="#060018"/></linearGradient>
+    <linearGradient id="g4" x1="20" y1="16" x2="100" y2="104" gradientUnits="userSpaceOnUse"><stop offset="0%" stop-color="#D6FFF2"/><stop offset="22%" stop-color="#58FFD6"/><stop offset="46%" stop-color="#00BFA5"/><stop offset="72%" stop-color="#005D70"/><stop offset="100%" stop-color="#021112"/></linearGradient>
+    <linearGradient id="g5" x1="20" y1="16" x2="100" y2="104" gradientUnits="userSpaceOnUse"><stop offset="0%" stop-color="#B8F4FF"/><stop offset="20%" stop-color="#38D6FF"/><stop offset="42%" stop-color="#276BFF"/><stop offset="68%" stop-color="#7A3CFF"/><stop offset="100%" stop-color="#070014"/></linearGradient>
+    <symbol id="mark" viewBox="0 0 120 120"><use href="#garm-d" fill="currentColor"/></symbol>
+    <symbol id="lv1" viewBox="0 0 120 120"><use href="#garm-d" fill="url(#g1)"/></symbol>
+    <symbol id="lv2" viewBox="0 0 120 120"><use href="#garm-d" fill="url(#g2)"/></symbol>
+    <symbol id="lv3" viewBox="0 0 120 120"><use href="#garm-d" fill="url(#g3)"/></symbol>
+    <symbol id="lv4" viewBox="0 0 120 120"><use href="#garm-d" fill="url(#g4)"/></symbol>
+    <symbol id="lv5" viewBox="0 0 120 120"><use href="#garm-d" fill="url(#g5)"/></symbol>
+  </defs>
+
+  <rect width="392" height="772" fill="#050506"/>
+  <line x1="391.5" y1="0" x2="391.5" y2="772" stroke="#ffffff" stroke-opacity="0.08"/>
+
+  <text x="16" y="32" font-size="12.5" font-weight="600" letter-spacing="-0.01em" fill="#f5f5f7">Agent Pipeline</text>
+
+  <!-- prompt box -->
+  <rect x="16" y="46" width="360" height="74" rx="11" fill="#08080a" stroke="#ffffff" stroke-opacity="0.1"/>
+  <text x="28" y="70" font-size="12.5" fill="#f5f5f7" fill-opacity="0.34">Describe the Python program you want — e.g.</text>
+  <text x="28" y="88" font-size="12.5" fill="#f5f5f7" fill-opacity="0.34">“read a CSV and plot the average of each</text>
+  <text x="28" y="106" font-size="12.5" fill="#f5f5f7" fill-opacity="0.34">numeric column.”</text>
+
+  <!-- output toggle -->
+  <text x="16" y="142" font-size="10" font-weight="600" letter-spacing="0.06em" fill="#f5f5f7" fill-opacity="0.34">OUTPUT</text>
+  <rect x="70" y="130" width="86" height="26" rx="8" fill="#16161a" stroke="#ffffff" stroke-opacity="0.14"/>
+  <text x="113" y="147" text-anchor="middle" font-size="11.5" fill="#f5f5f7">Single file</text>
+  <rect x="162" y="130" width="60" height="26" rx="8" fill="none" stroke="#ffffff" stroke-opacity="0.08"/>
+  <text x="192" y="147" text-anchor="middle" font-size="11.5" fill="#f5f5f7" fill-opacity="0.4">Repo</text>
+
+  <!-- buttons -->
+  <rect x="16" y="168" width="262" height="34" rx="9" fill="#f5f5f7"/>
+  <text x="147" y="190" text-anchor="middle" font-size="13" font-weight="600" fill="#08080a">Run Pipeline</text>
+  <rect x="286" y="168" width="90" height="34" rx="9" fill="none" stroke="#ffffff" stroke-opacity="0.14"/>
+  <text x="331" y="190" text-anchor="middle" font-size="12.5" fill="#f5f5f7" fill-opacity="0.6">Cancel</text>
+
+  <!-- stage cards -->
+  <!-- 1 Evaluate · done -->
+  <g>
+    <rect x="16" y="216" width="360" height="44" rx="12" fill="#0c0c0f" stroke="#ffffff" stroke-opacity="0.08"/>
+    <use href="#mark" x="29" y="225" width="26" height="26" color="#4ade80"/>
+    <text x="66" y="243" font-size="13" font-weight="580" fill="#f5f5f7">Evaluate</text>
+    <text x="360" y="242" text-anchor="end" font-size="10" font-weight="600" letter-spacing="0.07em" fill="#4ade80">DONE</text>
+  </g>
+  <!-- 2 System Design · done -->
+  <g>
+    <rect x="16" y="269" width="360" height="44" rx="12" fill="#0c0c0f" stroke="#ffffff" stroke-opacity="0.08"/>
+    <use href="#lv1" x="29" y="278" width="26" height="26"/>
+    <text x="66" y="296" font-size="13" font-weight="580" fill="#f5f5f7">System Design</text>
+    <text x="360" y="295" text-anchor="end" font-size="10" font-weight="600" letter-spacing="0.07em" fill="#4ade80">DONE</text>
+  </g>
+  <!-- 3 Generate Code · running (expanded) -->
+  <g>
+    <rect x="16" y="322" width="360" height="118" rx="12" fill="#0c0c0f" stroke="#ffffff" stroke-opacity="0.16"/>
+    <use href="#lv2" x="29" y="331" width="26" height="26"/>
+    <text x="66" y="349" font-size="13" font-weight="580" fill="#f5f5f7">Generate Code</text>
+    <text x="360" y="348" text-anchor="end" font-size="10" font-weight="600" letter-spacing="0.07em" fill="#f5f5f7">RUNNING</text>
+    <!-- reasoning block -->
+    <rect x="30" y="366" width="332" height="60" rx="6" fill="#ffffff" fill-opacity="0.03"/>
+    <rect x="30" y="366" width="2" height="60" fill="#ffffff" fill-opacity="0.14"/>
+    <text x="42" y="382" font-size="9.5" font-weight="600" letter-spacing="0.08em" fill="#f5f5f7" fill-opacity="0.34">REASONING</text>
+    <g font-family="'SF Mono', ui-monospace, Menlo, monospace" font-size="11" fill="#f5f5f7" fill-opacity="0.6">
+      <text x="42" y="400">3 numeric features → a small MLP fits.</text>
+      <text x="42" y="416">Writing models/net.py with a train loop…</text>
+    </g>
+  </g>
+  <!-- 4 Review · pending -->
+  <g opacity="0.55">
+    <rect x="16" y="449" width="360" height="44" rx="12" fill="#0c0c0f" stroke="#ffffff" stroke-opacity="0.08"/>
+    <use href="#lv3" x="29" y="458" width="26" height="26"/>
+    <text x="66" y="476" font-size="13" font-weight="580" fill="#f5f5f7">Review</text>
+    <text x="360" y="475" text-anchor="end" font-size="10" font-weight="600" letter-spacing="0.07em" fill="#f5f5f7" fill-opacity="0.34">PENDING</text>
+  </g>
+  <!-- 5 Fix & Compile · pending -->
+  <g opacity="0.55">
+    <rect x="16" y="502" width="360" height="44" rx="12" fill="#0c0c0f" stroke="#ffffff" stroke-opacity="0.08"/>
+    <use href="#lv4" x="29" y="511" width="26" height="26"/>
+    <text x="66" y="529" font-size="13" font-weight="580" fill="#f5f5f7">Fix &amp; Compile</text>
+    <text x="360" y="528" text-anchor="end" font-size="10" font-weight="600" letter-spacing="0.07em" fill="#f5f5f7" fill-opacity="0.34">PENDING</text>
+  </g>
+  <!-- 6 Run & Render · pending -->
+  <g opacity="0.55">
+    <rect x="16" y="555" width="360" height="44" rx="12" fill="#0c0c0f" stroke="#ffffff" stroke-opacity="0.08"/>
+    <use href="#lv5" x="29" y="564" width="26" height="26"/>
+    <text x="66" y="582" font-size="13" font-weight="580" fill="#f5f5f7">Run &amp; Render</text>
+    <text x="360" y="581" text-anchor="end" font-size="10" font-weight="600" letter-spacing="0.07em" fill="#f5f5f7" fill-opacity="0.34">PENDING</text>
+  </g>
+
+  <!-- iterate -->
+  <text x="16" y="638" font-size="10" font-weight="600" letter-spacing="0.06em" fill="#f5f5f7" fill-opacity="0.34">ITERATE ON THE CODE</text>
+  <rect x="16" y="648" width="360" height="34" rx="9" fill="#08080a" stroke="#ffffff" stroke-opacity="0.1"/>
+  <text x="28" y="670" font-size="12.5" fill="#f5f5f7" fill-opacity="0.34">Ask for a change — e.g. “plot the loss”…</text>
+
+  <text x="16" y="744" font-size="11" fill="#f5f5f7" fill-opacity="0.3">Agent Pipeline sidebar (#agent) — six-stage agentic flow</text>
+</svg>

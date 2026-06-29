@@ -1,0 +1,60 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="120" viewBox="0 0 1280 120" font-family="Inter, -apple-system, 'Segoe UI', sans-serif">
+  <defs>
+    <path id="garm-d" fill-rule="evenodd" d="M 66.54 24.28 A 69.28 69.28 0 0 1 94.20 72.20 A 11.00 11.00 0 0 1 87.66 83.52 A 69.28 69.28 0 0 1 32.34 83.52 A 11.00 11.00 0 0 1 25.80 72.20 A 69.28 69.28 0 0 1 53.46 24.28 A 11.00 11.00 0 0 1 66.54 24.28 Z M 63.25 41.62 A 35.51 35.51 0 0 1 77.54 66.37 A 5.50 5.50 0 0 1 74.29 72.01 A 35.51 35.51 0 0 1 45.71 72.01 A 5.50 5.50 0 0 1 42.46 66.37 A 35.51 35.51 0 0 1 56.75 41.62 A 5.50 5.50 0 0 1 63.25 41.62 Z"/>
+    <linearGradient id="g1" x1="20" y1="16" x2="100" y2="104" gradientUnits="userSpaceOnUse"><stop offset="0%" stop-color="#D9FFFB"/><stop offset="18%" stop-color="#5CFFF2"/><stop offset="42%" stop-color="#00B8FF"/><stop offset="70%" stop-color="#005BFF"/><stop offset="100%" stop-color="#02091A"/></linearGradient>
+    <linearGradient id="g2" x1="20" y1="16" x2="100" y2="104" gradientUnits="userSpaceOnUse"><stop offset="0%" stop-color="#BFDFFF"/><stop offset="20%" stop-color="#5A9DFF"/><stop offset="44%" stop-color="#185CFF"/><stop offset="70%" stop-color="#1026A8"/><stop offset="100%" stop-color="#030516"/></linearGradient>
+    <linearGradient id="g3" x1="20" y1="16" x2="100" y2="104" gradientUnits="userSpaceOnUse"><stop offset="0%" stop-color="#E2D6FF"/><stop offset="20%" stop-color="#8C7CFF"/><stop offset="44%" stop-color="#4B4DFF"/><stop offset="70%" stop-color="#2220B8"/><stop offset="100%" stop-color="#060018"/></linearGradient>
+    <linearGradient id="g4" x1="20" y1="16" x2="100" y2="104" gradientUnits="userSpaceOnUse"><stop offset="0%" stop-color="#D6FFF2"/><stop offset="22%" stop-color="#58FFD6"/><stop offset="46%" stop-color="#00BFA5"/><stop offset="72%" stop-color="#005D70"/><stop offset="100%" stop-color="#021112"/></linearGradient>
+    <linearGradient id="g5" x1="20" y1="16" x2="100" y2="104" gradientUnits="userSpaceOnUse"><stop offset="0%" stop-color="#B8F4FF"/><stop offset="20%" stop-color="#38D6FF"/><stop offset="42%" stop-color="#276BFF"/><stop offset="68%" stop-color="#7A3CFF"/><stop offset="100%" stop-color="#070014"/></linearGradient>
+    <symbol id="mark" viewBox="0 0 120 120"><use href="#garm-d" fill="currentColor"/></symbol>
+    <symbol id="lv1" viewBox="0 0 120 120"><use href="#garm-d" fill="url(#g1)"/></symbol>
+    <symbol id="lv2" viewBox="0 0 120 120"><use href="#garm-d" fill="url(#g2)"/></symbol>
+    <symbol id="lv3" viewBox="0 0 120 120"><use href="#garm-d" fill="url(#g3)"/></symbol>
+    <symbol id="lv4" viewBox="0 0 120 120"><use href="#garm-d" fill="url(#g4)"/></symbol>
+    <symbol id="lv5" viewBox="0 0 120 120"><use href="#garm-d" fill="url(#g5)"/></symbol>
+    <symbol id="flower" viewBox="0 0 120 120">
+      <g transform="rotate(0 60 60)"><use href="#lv1" x="32" y="4" width="56" height="56"/></g>
+      <g transform="rotate(60 60 60)"><use href="#lv2" x="32" y="4" width="56" height="56"/></g>
+      <g transform="rotate(120 60 60)"><use href="#lv3" x="32" y="4" width="56" height="56"/></g>
+      <g transform="rotate(180 60 60)"><use href="#lv4" x="32" y="4" width="56" height="56"/></g>
+      <g transform="rotate(240 60 60)"><use href="#lv5" x="32" y="4" width="56" height="56"/></g>
+      <g transform="rotate(300 60 60)"><use href="#mark" x="32" y="4" width="56" height="56" color="#f4f4f7"/></g>
+    </symbol>
+  </defs>
+
+  <rect width="1280" height="120" fill="#050506"/>
+  <!-- topbar bar (52px) -->
+  <rect width="1280" height="52" fill="#0a0a0c"/>
+  <line x1="0" y1="52" x2="1280" y2="52" stroke="#ffffff" stroke-opacity="0.08"/>
+
+  <!-- macOS traffic lights -->
+  <circle cx="22" cy="26" r="6" fill="#ff5f57"/><circle cx="42" cy="26" r="6" fill="#febc2e"/><circle cx="62" cy="26" r="6" fill="#28c840"/>
+
+  <!-- brand -->
+  <use href="#flower" x="90" y="12" width="28" height="28"/>
+  <text x="128" y="22" font-size="15" font-weight="620" letter-spacing="-0.02em" fill="#f5f5f7">Cicada</text>
+  <text x="128" y="38" font-size="11" fill="#f5f5f7" fill-opacity="0.34">Python Agentic IDE</text>
+
+  <!-- right cluster -->
+  <!-- status pill -->
+  <rect x="836" y="14" width="116" height="24" rx="12" fill="#0c0c0f" stroke="#ffffff" stroke-opacity="0.08"/>
+  <circle cx="852" cy="26" r="3.5" fill="#fbbf24"/>
+  <text x="864" y="30" font-size="12" fill="#f5f5f7" fill-opacity="0.6">Initializing</text>
+  <!-- project switcher -->
+  <rect x="964" y="14" width="104" height="24" rx="8" fill="#0c0c0f" stroke="#ffffff" stroke-opacity="0.08"/>
+  <path d="M978 21h7l1.6 1.6h7v7h-15.6z" fill="none" stroke="#f5f5f7" stroke-opacity="0.5" stroke-width="1.4"/>
+  <text x="1002" y="30" font-size="12" fill="#f5f5f7">project</text>
+  <path d="M1052 24l4 4 4-4" fill="none" stroke="#f5f5f7" stroke-opacity="0.5" stroke-width="1.4" stroke-linecap="round"/>
+  <!-- workspace -->
+  <rect x="1080" y="14" width="104" height="24" rx="8" fill="#0c0c0f" stroke="#ffffff" stroke-opacity="0.08"/>
+  <text x="1096" y="30" font-size="12" fill="#f5f5f7" fill-opacity="0.6">Workspace</text>
+  <path d="M1168 24l4 4 4-4" fill="none" stroke="#f5f5f7" stroke-opacity="0.5" stroke-width="1.4" stroke-linecap="round"/>
+  <!-- new project + -->
+  <rect x="1196" y="14" width="28" height="24" rx="8" fill="#0c0c0f" stroke="#ffffff" stroke-opacity="0.08"/>
+  <path d="M1210 21v10M1205 26h10" stroke="#f5f5f7" stroke-opacity="0.7" stroke-width="1.6" stroke-linecap="round"/>
+  <!-- settings gear -->
+  <circle cx="1250" cy="26" r="6" fill="none" stroke="#f5f5f7" stroke-opacity="0.55" stroke-width="1.6"/>
+  <circle cx="1250" cy="26" r="2" fill="#f5f5f7" fill-opacity="0.55"/>
+
+  <text x="22" y="98" font-size="12" fill="#f5f5f7" fill-opacity="0.34">Top bar (#topbar) — brand · model status · project / workspace switchers · new-project · settings</text>
+</svg>

@@ -1,0 +1,477 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self' 'unsafe-inline' blob: data: file:; img-src 'self' file: data: blob:; script-src 'self' 'unsafe-inline' blob: file:; worker-src blob:; style-src 'self' 'unsafe-inline' file:; font-src 'self' file: data:;" />
+  <title>Cicada</title>
+  <link rel="stylesheet" href="../../node_modules/@xterm/xterm/css/xterm.css" />
+  <link rel="stylesheet" href="../../node_modules/katex/dist/katex.min.css" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <!-- GARM logo marks: the original white Reuleaux mark (#garm-mark, used in the top bar and
+       as the Evaluate stage badge) plus 5 gradient variants (#garm-logo-v1..v5) used as the
+       remaining pipeline stage badges. Each variant fades into a near-black bottom so the mark
+       blends into the dark sidebar background. The geometry lives once in #garm-d so each mark
+       is just a <use> painted with a gradient (or currentColor for the original). -->
+  <svg width="0" height="0" aria-hidden="true" style="position:absolute">
+    <defs>
+      <path id="garm-d" fill-rule="evenodd"
+        d="M 66.54 24.28 A 69.28 69.28 0 0 1 94.20 72.20 A 11.00 11.00 0 0 1 87.66 83.52 A 69.28 69.28 0 0 1 32.34 83.52 A 11.00 11.00 0 0 1 25.80 72.20 A 69.28 69.28 0 0 1 53.46 24.28 A 11.00 11.00 0 0 1 66.54 24.28 Z M 63.25 41.62 A 35.51 35.51 0 0 1 77.54 66.37 A 5.50 5.50 0 0 1 74.29 72.01 A 35.51 35.51 0 0 1 45.71 72.01 A 5.50 5.50 0 0 1 42.46 66.37 A 35.51 35.51 0 0 1 56.75 41.62 A 5.50 5.50 0 0 1 63.25 41.62 Z" />
+
+      <!-- v1 Glacier Cyan -->
+      <linearGradient id="garm-gradient-v1" x1="20" y1="16" x2="100" y2="104" gradientUnits="userSpaceOnUse">
+        <stop offset="0%" stop-color="#D9FFFB" /><stop offset="18%" stop-color="#5CFFF2" /><stop offset="42%" stop-color="#00B8FF" /><stop offset="70%" stop-color="#005BFF" /><stop offset="100%" stop-color="#02091A" />
+      </linearGradient>
+      <radialGradient id="garm-highlight-v1" cx="31" cy="20" r="76" gradientUnits="userSpaceOnUse">
+        <stop offset="0%" stop-color="#FFFFFF" stop-opacity="0.94" /><stop offset="24%" stop-color="#B8FFF8" stop-opacity="0.66" /><stop offset="52%" stop-color="#00C8FF" stop-opacity="0.34" /><stop offset="78%" stop-color="#005BFF" stop-opacity="0.15" /><stop offset="100%" stop-color="#02091A" stop-opacity="0" />
+      </radialGradient>
+
+      <!-- v2 Polar Sapphire -->
+      <linearGradient id="garm-gradient-v2" x1="20" y1="16" x2="100" y2="104" gradientUnits="userSpaceOnUse">
+        <stop offset="0%" stop-color="#BFDFFF" /><stop offset="20%" stop-color="#5A9DFF" /><stop offset="44%" stop-color="#185CFF" /><stop offset="70%" stop-color="#1026A8" /><stop offset="100%" stop-color="#030516" />
+      </linearGradient>
+      <radialGradient id="garm-highlight-v2" cx="31" cy="20" r="76" gradientUnits="userSpaceOnUse">
+        <stop offset="0%" stop-color="#FFFFFF" stop-opacity="0.88" /><stop offset="24%" stop-color="#BFDFFF" stop-opacity="0.58" /><stop offset="50%" stop-color="#2D74FF" stop-opacity="0.32" /><stop offset="78%" stop-color="#152AAE" stop-opacity="0.16" /><stop offset="100%" stop-color="#030516" stop-opacity="0" />
+      </radialGradient>
+
+      <!-- v3 Frozen Violet -->
+      <linearGradient id="garm-gradient-v3" x1="20" y1="16" x2="100" y2="104" gradientUnits="userSpaceOnUse">
+        <stop offset="0%" stop-color="#E2D6FF" /><stop offset="20%" stop-color="#8C7CFF" /><stop offset="44%" stop-color="#4B4DFF" /><stop offset="70%" stop-color="#2220B8" /><stop offset="100%" stop-color="#060018" />
+      </linearGradient>
+      <radialGradient id="garm-highlight-v3" cx="31" cy="20" r="76" gradientUnits="userSpaceOnUse">
+        <stop offset="0%" stop-color="#FFFFFF" stop-opacity="0.90" /><stop offset="24%" stop-color="#E2D6FF" stop-opacity="0.58" /><stop offset="50%" stop-color="#6C6BFF" stop-opacity="0.32" /><stop offset="76%" stop-color="#3023C8" stop-opacity="0.17" /><stop offset="100%" stop-color="#060018" stop-opacity="0" />
+      </radialGradient>
+
+      <!-- v4 Arctic Emerald -->
+      <linearGradient id="garm-gradient-v4" x1="20" y1="16" x2="100" y2="104" gradientUnits="userSpaceOnUse">
+        <stop offset="0%" stop-color="#D6FFF2" /><stop offset="22%" stop-color="#58FFD6" /><stop offset="46%" stop-color="#00BFA5" /><stop offset="72%" stop-color="#005D70" /><stop offset="100%" stop-color="#021112" />
+      </linearGradient>
+      <radialGradient id="garm-highlight-v4" cx="31" cy="20" r="76" gradientUnits="userSpaceOnUse">
+        <stop offset="0%" stop-color="#FFFFFF" stop-opacity="0.90" /><stop offset="26%" stop-color="#B7FFE9" stop-opacity="0.56" /><stop offset="52%" stop-color="#00CBB2" stop-opacity="0.30" /><stop offset="78%" stop-color="#006777" stop-opacity="0.15" /><stop offset="100%" stop-color="#021112" stop-opacity="0" />
+      </radialGradient>
+
+      <!-- v5 Midnight Aurora -->
+      <linearGradient id="garm-gradient-v5" x1="20" y1="16" x2="100" y2="104" gradientUnits="userSpaceOnUse">
+        <stop offset="0%" stop-color="#B8F4FF" /><stop offset="20%" stop-color="#38D6FF" /><stop offset="42%" stop-color="#276BFF" /><stop offset="68%" stop-color="#7A3CFF" /><stop offset="100%" stop-color="#070014" />
+      </linearGradient>
+      <radialGradient id="garm-highlight-v5" cx="31" cy="20" r="76" gradientUnits="userSpaceOnUse">
+        <stop offset="0%" stop-color="#FFFFFF" stop-opacity="0.91" /><stop offset="24%" stop-color="#B8F4FF" stop-opacity="0.58" /><stop offset="50%" stop-color="#3180FF" stop-opacity="0.33" /><stop offset="76%" stop-color="#7A3CFF" stop-opacity="0.19" /><stop offset="100%" stop-color="#070014" stop-opacity="0" />
+      </radialGradient>
+    </defs>
+
+    <symbol id="garm-mark" viewBox="0 0 120 120"><use href="#garm-d" fill="currentColor" /></symbol>
+    <symbol id="garm-logo-v1" viewBox="0 0 120 120"><use href="#garm-d" fill="url(#garm-gradient-v1)" /><use href="#garm-d" fill="url(#garm-highlight-v1)" opacity="0.82" /></symbol>
+    <symbol id="garm-logo-v2" viewBox="0 0 120 120"><use href="#garm-d" fill="url(#garm-gradient-v2)" /><use href="#garm-d" fill="url(#garm-highlight-v2)" opacity="0.82" /></symbol>
+    <symbol id="garm-logo-v3" viewBox="0 0 120 120"><use href="#garm-d" fill="url(#garm-gradient-v3)" /><use href="#garm-d" fill="url(#garm-highlight-v3)" opacity="0.82" /></symbol>
+    <symbol id="garm-logo-v4" viewBox="0 0 120 120"><use href="#garm-d" fill="url(#garm-gradient-v4)" /><use href="#garm-d" fill="url(#garm-highlight-v4)" opacity="0.82" /></symbol>
+    <symbol id="garm-logo-v5" viewBox="0 0 120 120"><use href="#garm-d" fill="url(#garm-gradient-v5)" /><use href="#garm-d" fill="url(#garm-highlight-v5)" opacity="0.82" /></symbol>
+
+    <!-- Clip = the white mark petal's own region (rotate 300, same place/scale as below).
+         Used to weave the seam: the six petals are painted in order so each laps the previous,
+         which leaves ONE break where the last petal (the white mark) sits on top of the first.
+         Drawing petal-1 again, clipped to this region, on top makes petal-1 lap the white mark —
+         closing the cycle so the white triangle is woven (laps one neighbour, lapped by the
+         other) instead of sitting on top as an outlier. (translate 32,4 + scale 56/120 ≈ 0.46667
+         reproduces the x=32 y=4 width=56 height=56 placement the petals use.) -->
+    <clipPath id="garm-weave-clip"><use href="#garm-d" transform="rotate(300 60 60) translate(32 4) scale(0.4666667)" /></clipPath>
+
+    <!-- Chat agent mark: the six logos overlapped symmetrically into a flower — each is a petal
+         radiating from a shared centre, rotated 60° apart so they overlap like petals. The final
+         clipped petal closes the over-under weave at the seam (see #garm-weave-clip above). -->
+    <symbol id="garm-chat-icon" viewBox="0 0 120 120">
+      <g transform="rotate(0 60 60)"><use href="#garm-logo-v1" x="32" y="4" width="56" height="56" /></g>
+      <g transform="rotate(60 60 60)"><use href="#garm-logo-v2" x="32" y="4" width="56" height="56" /></g>
+      <g transform="rotate(120 60 60)"><use href="#garm-logo-v3" x="32" y="4" width="56" height="56" /></g>
+      <g transform="rotate(180 60 60)"><use href="#garm-logo-v4" x="32" y="4" width="56" height="56" /></g>
+      <g transform="rotate(240 60 60)"><use href="#garm-logo-v5" x="32" y="4" width="56" height="56" /></g>
+      <g transform="rotate(300 60 60)"><use href="#garm-mark" x="32" y="4" width="56" height="56" /></g>
+      <g clip-path="url(#garm-weave-clip)"><use href="#garm-logo-v1" x="32" y="4" width="56" height="56" /></g>
+    </symbol>
+  </svg>
+
+  <!-- Loading splash: the flower mark spins up slow → fast → slow (easeInOutQuint),
+       then the overlay fades away once the workbench is ready (see app.js dismissSplash). -->
+  <div id="splash">
+    <div class="splash-stage">
+      <div class="splash-logo-wrap">
+        <svg class="splash-logo" viewBox="0 0 120 120" aria-hidden="true"><use href="#garm-chat-icon" /></svg>
+      </div>
+      <div class="splash-word">CICADA</div>
+    </div>
+  </div>
+
+  <!-- Top bar -->
+  <header id="topbar">
+    <div class="brand">
+      <svg class="logo" viewBox="0 0 120 120"><use href="#garm-chat-icon" /></svg>
+      <div class="brand-text">
+        <div class="brand-name">Cicada</div>
+        <div class="brand-sub">Python Agentic IDE</div>
+      </div>
+    </div>
+    <div class="topbar-spacer"></div>
+    <div id="model-status" class="status-pill status-starting">
+      <span class="status-dot"></span>
+      <span class="status-text">Initializing</span>
+    </div>
+    <div id="project-switcher" class="proj-switch">
+      <button id="btn-project" class="btn btn-ghost btn-sm proj-btn" title="Switch or create a project">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z"/></svg>
+        <span id="project-name">project</span>
+        <span class="caret">▾</span>
+      </button>
+      <div id="project-menu" class="proj-menu hidden"></div>
+    </div>
+    <button id="btn-workspace" class="btn btn-ghost btn-sm" title="Open project folder in Finder">Workspace</button>
+    <button id="btn-welcome" class="icon-btn" title="Welcome guide" aria-label="Open the welcome guide">
+      <svg viewBox="0 0 24 24"><path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9L12 3z"/></svg>
+    </button>
+    <button id="btn-settings" class="icon-btn" title="Settings" aria-label="Settings">
+      <svg viewBox="0 0 24 24"><path d="M4 7h10M18 7h2M4 17h2M10 17h10" /><circle cx="16" cy="7" r="2.4" /><circle cx="8" cy="17" r="2.4" /></svg>
+    </button>
+  </header>
+
+  <!-- Main split: agent sidebar | editor + dock -->
+  <main id="main">
+    <!-- LEFT: Agent / pipeline -->
+    <section id="agent" class="panel">
+      <div class="panel-head">
+        <span class="panel-title">Agent Pipeline</span>
+        <span id="pipeline-timer" class="muted mono"></span>
+      </div>
+      <div class="prompt-area">
+        <textarea id="prompt" placeholder="Describe the Python program you want. e.g. &quot;A script that reads a CSV and plots the average of each numeric column.&quot;"></textarea>
+        <div class="output-mode" id="output-mode">
+          <span class="om-label" title="How the agent structures a new program">Output</span>
+          <div class="om-seg" role="radiogroup" aria-label="Agent output structure">
+            <button class="om-opt active" id="om-single" data-mode="single" role="radio" aria-checked="true"
+              title="One self-contained main.py (classic).">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/></svg>
+              <span>Single file</span>
+            </button>
+            <button class="om-opt" id="om-repo" data-mode="repo" role="radio" aria-checked="false"
+              title="A proper multi-file project: packages &amp; modules with accurate imports and a runnable main.py.">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z"/></svg>
+              <span>Repo</span>
+            </button>
+          </div>
+        </div>
+        <div class="prompt-actions">
+          <button id="btn-run-pipeline" class="btn btn-accent">Run Pipeline</button>
+          <button id="btn-cancel-pipeline" class="btn btn-danger" disabled>Cancel</button>
+        </div>
+      </div>
+      <div id="stages" class="stages"></div>
+      <div class="refine-area">
+        <div class="refine-label"><span>Iterate on the code</span><kbd class="refine-hint">⌘ ↵</kbd></div>
+        <div class="refine-box">
+          <textarea id="refine-input" rows="1" placeholder="Ask for a change — e.g. “plot the result”, “add CLI args”"></textarea>
+          <button id="btn-refine" class="refine-send" disabled title="Apply an agentic change to the current code (⌘↵)" aria-label="Apply change">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 20V6M6 12l6-6 6 6"/></svg>
+          </button>
+        </div>
+      </div>
+    </section>
+
+    <div class="splitter splitter-v" data-split="agent"></div>
+
+    <!-- RIGHT: file tree + editor stacked over dock -->
+    <section id="workbench">
+      <div id="edit-row">
+      <aside id="filetree-panel">
+        <div class="ft-head">
+          <span class="ft-title">Explorer</span>
+          <div class="ft-actions">
+            <button id="btn-new-file" class="ft-act" title="New file (supports sub/dir/name.py)">＋</button>
+            <button id="btn-new-folder" class="ft-act" title="New folder">▢</button>
+            <button id="btn-refresh-files" class="ft-act" title="Refresh tree">⟳</button>
+          </div>
+        </div>
+        <div id="ft-new" class="ft-new hidden">
+          <span id="ft-new-kind" class="ft-new-kind">file</span>
+          <input id="ft-new-input" type="text" placeholder="name.py or sub/dir/name.py" spellcheck="false" />
+        </div>
+        <div id="filetree" class="filetree"></div>
+      </aside>
+      <div id="editor-region">
+        <div class="editor-toolbar">
+          <div class="file-tab" id="file-tab"><span class="stream-dot"></span><span class="file-name" id="file-name">main.py</span></div>
+          <div class="toolbar-spacer"></div>
+          <button id="btn-edit-selection" class="btn btn-ghost" title="Rewrite the selected code with the agent (⌘K)">Edit Selection</button>
+          <button id="btn-compile" class="btn btn-ghost">Compile</button>
+          <button id="btn-run" class="btn btn-accent">Run</button>
+          <button id="btn-stop" class="btn btn-danger" disabled>Stop</button>
+          <button id="btn-save" class="btn btn-ghost">Save</button>
+        </div>
+        <!-- Agentic select-and-replace composer: appears when you edit a selection. -->
+        <div id="inpaint-bar" class="inpaint-bar hidden">
+          <span class="inpaint-badge" id="inpaint-range">lines</span>
+          <input id="inpaint-input" type="text" placeholder="Describe how to rewrite the selected code — e.g. &quot;vectorize this loop&quot;, &quot;add error handling&quot;, &quot;use a dict comprehension&quot;" />
+          <button id="btn-inpaint-apply" class="btn btn-accent btn-sm">Replace</button>
+          <button id="btn-inpaint-cancel" class="btn btn-ghost btn-sm">Cancel</button>
+        </div>
+        <div id="editor"></div>
+      </div>
+      </div>
+
+      <div class="splitter splitter-h" data-split="dock"></div>
+
+      <div id="dock">
+        <div class="dock-tabs">
+          <button class="dock-tab active" data-tab="console">Console</button>
+          <button class="dock-tab" data-tab="render">Render</button>
+          <button class="dock-tab" data-tab="data">Data<span id="data-badge" class="dock-badge hidden"></span></button>
+          <button class="dock-tab" data-tab="terminal">Terminal</button>
+          <button class="dock-tab" data-tab="memory">Memory</button>
+          <button class="dock-tab" data-tab="env">Env</button>
+          <button class="dock-tab" data-tab="problems">Problems</button>
+          <button class="dock-tab dock-tab-chat" data-tab="chat"><svg class="chat-ico" viewBox="0 0 120 120" aria-hidden="true"><use href="#garm-chat-icon" /></svg>Chat</button>
+          <div class="toolbar-spacer"></div>
+          <button id="btn-clear-dock" class="btn btn-ghost btn-sm">Clear</button>
+        </div>
+        <div class="dock-body">
+          <div class="dock-pane active" data-pane="console">
+            <div id="console" class="stream"></div>
+            <div class="stdin-row">
+              <span class="stdin-prompt">stdin</span>
+              <input id="stdin" type="text" placeholder="Send input to the running program, press Enter" />
+            </div>
+          </div>
+          <div class="dock-pane" data-pane="render">
+            <div id="render" class="render-grid">
+              <div class="empty-hint">Plots and images produced by your program appear here.</div>
+            </div>
+          </div>
+          <div class="dock-pane" data-pane="data">
+            <div class="data-wrap">
+              <div class="data-head">
+                <span id="data-summary" class="data-summary">Drop in CSV, Excel, or JSON to analyze and build from.</span>
+                <div class="toolbar-spacer"></div>
+                <button id="btn-data-add" class="btn btn-accent btn-sm">Add data…</button>
+              </div>
+              <div class="data-scroll" id="data-body">
+                <div class="data-empty" id="data-empty">
+                  <svg class="data-empty-ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 16V4M8 8l4-4 4 4"/><path d="M4 16v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/></svg>
+                  <div class="data-empty-title">Add data to this project</div>
+                  <div class="data-empty-sub">Drag &amp; drop files anywhere, or use <b>Add data…</b> — CSV, Excel (.xlsx/.xls), and JSON. Cicada indexes each file, detects its schema, and makes it available to the agent.</div>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="dock-pane" data-pane="terminal">
+            <div id="terminal"></div>
+          </div>
+          <div class="dock-pane" data-pane="memory">
+            <div class="memory-wrap">
+              <div class="memory-scroll" id="memory-body">
+                <div class="empty-hint">The agent's persistent project memory appears here.</div>
+              </div>
+              <div class="memory-add">
+                <input id="memory-fact" type="text" placeholder="Pin a fact the agent should remember — e.g. &quot;input file is data.csv&quot;, &quot;target Python 3.11&quot;" />
+                <button id="btn-memory-add" class="btn btn-ghost btn-sm">Pin</button>
+                <button id="btn-memory-clear" class="btn btn-ghost btn-sm" title="Forget everything">Clear</button>
+              </div>
+            </div>
+          </div>
+          <div class="dock-pane" data-pane="env">
+            <div class="env-wrap">
+              <div class="env-head">
+                <span id="env-python" class="env-python">Detecting environment…</span>
+                <span id="env-venv-badge" class="env-badge hidden"></span>
+                <div class="toolbar-spacer"></div>
+                <button id="btn-env-venv" class="btn btn-ghost btn-sm" title="Create a .venv in the workspace and switch Cicada to it">New venv</button>
+                <button id="btn-env-refresh" class="btn btn-ghost btn-sm">Refresh</button>
+              </div>
+              <div class="env-scroll" id="env-body"></div>
+              <div class="env-install">
+                <input id="env-install-input" type="text" placeholder="Install any package — e.g. tensorflow, jax, xgboost, seaborn, transformers" />
+                <button id="btn-env-install" class="btn btn-accent btn-sm">Install</button>
+              </div>
+            </div>
+          </div>
+          <div class="dock-pane" data-pane="problems">
+            <div id="problems" class="stream"><div class="empty-hint">Compiler diagnostics appear here.</div></div>
+          </div>
+          <div class="dock-pane" data-pane="chat">
+            <div class="chat-wrap">
+              <div class="chat-scroll" id="chat-body">
+                <div class="chat-empty" id="chat-empty">
+                  <svg class="chat-empty-ico" viewBox="0 0 120 120" aria-hidden="true"><use href="#garm-chat-icon" /></svg>
+                  <div class="chat-empty-title">Ask Cicada</div>
+                  <div class="chat-empty-sub">Questions about your code, math, or ideas — the agent can see your whole project. Right-click in the editor (or press ⌘L) to open chat; select lines first to attach them.</div>
+                </div>
+              </div>
+              <div id="chat-attach" class="chat-attach hidden"></div>
+              <div class="chat-composer">
+                <textarea id="chat-input" rows="1" placeholder="Ask anything about this project — code, math, ideas…"></textarea>
+                <button id="btn-chat-send" class="refine-send" title="Send (⌘↵)" aria-label="Send">
+                  <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 20V6M6 12l6-6 6 6"/></svg>
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <!-- Settings modal -->
+  <div id="settings-overlay" class="overlay hidden">
+    <div class="modal">
+      <div class="modal-head">
+        <span>Settings</span>
+        <button id="btn-close-settings" class="btn btn-ghost btn-sm">Close</button>
+      </div>
+      <div class="modal-body">
+        <label class="field">
+          <span>Inference provider</span>
+          <select id="cfg-provider" class="cfg-select">
+            <option value="local">Local model — llama-server + GGUF</option>
+            <option value="deepseek">DeepSeek API — cloud (v4-flash / v4-pro)</option>
+          </select>
+        </label>
+
+        <div id="deepseek-only" class="hidden">
+          <label class="field">
+            <span>DeepSeek model</span>
+            <select id="cfg-deepseekModel" class="cfg-select">
+              <option value="deepseek-v4-flash">deepseek-v4-flash — faster &amp; cheaper</option>
+              <option value="deepseek-v4-pro">deepseek-v4-pro — stronger</option>
+            </select>
+          </label>
+          <label class="field">
+            <span>DeepSeek API key</span>
+            <input id="cfg-deepseekApiKey" type="password" placeholder="sk-…" autocomplete="off" spellcheck="false" />
+            <a id="link-deepseek-key" class="field-link" href="https://platform.deepseek.com/api_keys">Create a new API key at platform.deepseek.com →</a>
+          </label>
+        </div>
+
+        <div id="local-only">
+          <label class="field">
+            <span>Model file (.gguf)</span>
+            <div class="field-row">
+              <input id="cfg-modelPath" type="text" />
+              <button id="btn-pick-model" class="btn btn-ghost btn-sm">Browse</button>
+            </div>
+          </label>
+          <div class="field-grid">
+            <label class="field"><span>Server port</span><input id="cfg-serverPort" type="number" /></label>
+            <label class="field"><span>Context size</span><input id="cfg-contextSize" type="number" /></label>
+            <label class="field"><span>GPU layers (-ngl)</span><input id="cfg-gpuLayers" type="number" /></label>
+          </div>
+        </div>
+
+        <div class="field-grid">
+          <label class="field"><span>Temperature</span><input id="cfg-temperature" type="number" step="0.05" /></label>
+          <label class="field"><span>Max tokens / stage</span><input id="cfg-maxTokens" type="number" /></label>
+          <label class="field"><span>Max fix iterations</span><input id="cfg-maxFixIterations" type="number" /></label>
+        </div>
+        <label class="field">
+          <span>Python interpreter — point at a venv's <code>bin/python</code> for an isolated environment</span>
+          <div class="field-row">
+            <input id="cfg-pythonPath" type="text" />
+            <button id="btn-pick-python" class="btn btn-ghost btn-sm">Browse</button>
+          </div>
+          <div id="cfg-python-detected" class="detected-row"></div>
+        </label>
+        <p class="muted small">Changing the model, port, context size, or GPU layers restarts the local server. Changing the interpreter re-scans installed libraries (see the Env tab) and points the terminal at it.</p>
+      </div>
+      <div class="modal-foot">
+        <button id="btn-save-settings" class="btn btn-accent">Save &amp; Apply</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Drag-and-drop overlay: appears while files are dragged over the window, anywhere in
+       the app. Dropping ingests supported data files into the active project. -->
+  <div id="drop-overlay" class="drop-overlay hidden">
+    <div class="drop-card">
+      <svg class="drop-ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 16V4M8 8l4-4 4 4"/><path d="M4 16v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/></svg>
+      <div class="drop-title">Drop to add to your project</div>
+      <div class="drop-sub">CSV · Excel (.xlsx/.xls) · JSON</div>
+    </div>
+  </div>
+
+  <!-- Kinetic-typography intro: a beat-timed word sequence on alternating black/white
+       backgrounds that plays as a splash when the welcome tour is triggered, then
+       cross-dissolves into the modal below. Words are spawned into the stage by
+       wireOnboarding() in app.js — each one rides a shared "extended-ease" relay
+       (dense linear-timed keyframes) so the motion flows continuously beat to beat. -->
+  <div id="onboard-intro" class="onboard-intro hidden" aria-hidden="true">
+    <div class="onboard-intro-stage" id="onboard-intro-stage"></div>
+  </div>
+
+  <!-- Onboarding / welcome modal. The cicada artwork is a single fixed layer pinned to the
+       right; page 0 is the full cover, and pages 1+ slide a text column in on the left while
+       the cicada stays put behind a left scrim. First run shows it automatically; the ✦ button
+       in the top bar reopens it. -->
+  <div id="onboard-overlay" class="onboard-overlay hidden" role="dialog" aria-modal="true" aria-label="Welcome to Cicada">
+    <div id="onboard-modal" class="onboard-modal">
+      <img class="onboard-photo" src="../../assets/cicada-onboarding.png" alt="Cicada — Python Agentic IDE" draggable="false" />
+      <div class="onboard-scrim"></div>
+
+      <button class="onboard-close" id="onboard-close" title="Close (Esc)" aria-label="Close welcome guide">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
+      </button>
+
+      <!-- Swipeable text column. Slide 0 is empty so the cover art shows through. -->
+      <div class="onboard-stage">
+        <div class="onboard-track" id="onboard-track">
+          <section class="onboard-slide onboard-slide-cover" aria-hidden="true"></section>
+
+          <section class="onboard-slide">
+            <div class="onboard-eyebrow">For non-coders &amp; beginners</div>
+            <h2 class="onboard-h">Describe it.<br/>Cicada builds it.</h2>
+            <p class="onboard-p">Write what you want in plain English. Cicada plans, writes, runs, and fixes the Python for you through a six-stage agentic pipeline — no setup, no boilerplate to memorize.</p>
+            <div class="onboard-tags"><span>Evaluate</span><span>Design</span><span>Generate</span><span>Review</span><span>Fix</span><span>Run</span></div>
+          </section>
+
+          <section class="onboard-slide">
+            <div class="onboard-eyebrow">Researchers &amp; data scientists</div>
+            <h2 class="onboard-h">Build &amp; test real<br/>ML &amp; deep-learning models</h2>
+            <p class="onboard-p">Train small models and run experiments with the frameworks you already know. Plots, metrics, and images render right inside the IDE as your code runs.</p>
+            <div class="onboard-tags"><span>PyTorch</span><span>TensorFlow</span><span>Keras</span><span>scikit-learn</span><span>NumPy · pandas</span></div>
+          </section>
+
+          <section class="onboard-slide">
+            <div class="onboard-eyebrow">Designers &amp; system thinkers</div>
+            <h2 class="onboard-h">Prototype, run,<br/>experiment</h2>
+            <p class="onboard-p">Spin up rapid prototypes in a built-in editor, terminal, and Python environment. Install any package in one click, and pin facts to the agent's persistent project memory.</p>
+            <div class="onboard-tags"><span>Editor</span><span>Terminal</span><span>Live plots</span><span>Project memory</span></div>
+          </section>
+
+          <section class="onboard-slide">
+            <div class="onboard-eyebrow">Private by default</div>
+            <h2 class="onboard-h">Runs locally.<br/>Learn as you go.</h2>
+            <p class="onboard-p">A local AI model runs on your own machine, so your code and data stay with you. Every file comes out clean and commented — read it to learn how it works.</p>
+          </section>
+        </div>
+      </div>
+
+      <div class="onboard-nav">
+        <div class="onboard-dots" id="onboard-dots" role="tablist" aria-label="Onboarding pages"></div>
+        <div class="onboard-actions">
+          <button class="onboard-btn onboard-btn-ghost" id="onboard-skip">Skip tour</button>
+          <button class="onboard-btn onboard-btn-ghost" id="onboard-back" aria-label="Previous page">Back</button>
+          <button class="onboard-btn onboard-btn-primary" id="onboard-next">Get started</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Load xterm (UMD) BEFORE Monaco's AMD loader, so it attaches to window
+       instead of registering as an anonymous AMD module and colliding. -->
+  <script src="../../node_modules/@xterm/xterm/lib/xterm.js"></script>
+  <script src="../../node_modules/@xterm/addon-fit/lib/addon-fit.js"></script>
+  <!-- KaTeX (UMD) for LaTeX rendering in chat. Load BEFORE Monaco's AMD loader so
+       it attaches to window.katex instead of registering as an anonymous AMD module. -->
+  <script src="../../node_modules/katex/dist/katex.min.js"></script>
+  <!-- Monaco worker bootstrap must run before its loader. -->
+  <script src="editor-bootstrap.js"></script>
+  <script src="../../node_modules/monaco-editor/min/vs/loader.js"></script>
+  <script src="editor.js"></script>
+  <script src="term.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

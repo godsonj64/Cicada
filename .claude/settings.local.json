@@ -1,0 +1,14 @@
+{
+  "permissions": {
+    "allow": [
+      "Read(//Users/godsonjohnson/Downloads/**)",
+      "Bash(npm --version)",
+      "Bash(pip3 --version)",
+      "Bash(git --version)",
+      "Bash(ollama --version)",
+      "Bash(node scripts/check.js)",
+      "Bash(curl -s -m 2 http://127.0.0.1:8127/health)",
+      "Bash(gh auth *)"
+    ]
+  }
+}

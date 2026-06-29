@@ -1,0 +1,8 @@
+node_modules/
+config.json
+workspace/
+*.log
+.DS_Store
+dist/
+out/
+*.gguf

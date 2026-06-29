@@ -1,0 +1,116 @@
+'use strict';
+
+const { contextBridge, ipcRenderer, webUtils } = require('electron');
+
+// Channels the renderer is allowed to subscribe to (main -> renderer events).
+const EVENT_CHANNELS = new Set([
+  'llama:status', 'llama:log',
+  'pipeline:start', 'pipeline:code', 'pipeline:code-live', 'pipeline:code-stream-start', 'pipeline:code-stream-end',
+  'pipeline:files', 'pipeline:done', 'pipeline:error', 'pipeline:log',
+  'stage:start', 'stage:delta', 'stage:done', 'stage:error',
+  'run:clear', 'run:started', 'run:data', 'run:exit', 'run:images',
+  'terminal:data', 'terminal:exit',
+  'memory:update',
+  'env:update', 'env:install-start', 'env:install-data', 'env:install-exit',
+  'pipeline:missingModule',
+  'chat:delta', 'chat:done', 'chat:error',
+  'datasets:update', 'datasets:progress',
+]);
+
+contextBridge.exposeInMainWorld('garm', {
+  config: {
+    get: () => ipcRenderer.invoke('config:get'),
+    set: (partial) => ipcRenderer.invoke('config:set', partial),
+  },
+  llama: {
+    info: () => ipcRenderer.invoke('llama:info'),
+    restart: (partial) => ipcRenderer.invoke('llama:restart', partial),
+  },
+  pipeline: {
+    run: (request) => ipcRenderer.invoke('pipeline:run', request),
+    refine: (request, code, file) => ipcRenderer.invoke('pipeline:refine', { request, code, file }),
+    inpaint: (request, code, selection, file) => ipcRenderer.invoke('pipeline:inpaint', { request, code, selection, file }),
+    cancel: () => ipcRenderer.invoke('pipeline:cancel'),
+  },
+  chat: {
+    // messages: [{ role, content, context? }] — the last user turn may carry an editor attachment.
+    send: (messages) => ipcRenderer.invoke('chat:send', { messages }),
+    cancel: () => ipcRenderer.invoke('chat:cancel'),
+  },
+  memory: {
+    get: () => ipcRenderer.invoke('memory:get'),
+    addFact: (fact) => ipcRenderer.invoke('memory:addFact', { fact }),
+    removeFact: (index) => ipcRenderer.invoke('memory:removeFact', { index }),
+    clear: () => ipcRenderer.invoke('memory:clear'),
+  },
+  env: {
+    get: () => ipcRenderer.invoke('env:get'),
+    refresh: () => ipcRenderer.invoke('env:refresh'),
+    install: (spec) => ipcRenderer.invoke('env:install', { spec }),
+    cancelInstall: () => ipcRenderer.invoke('env:install-cancel'),
+    discover: () => ipcRenderer.invoke('env:discover'),
+    createVenv: () => ipcRenderer.invoke('env:createVenv'),
+  },
+  code: {
+    save: (code, file) => ipcRenderer.invoke('code:save', { code, file }),
+    compile: (code, file) => ipcRenderer.invoke('code:compile', { code, file }),
+    run: (code, file) => ipcRenderer.invoke('code:run', { code, file }),
+  },
+  projects: {
+    list: () => ipcRenderer.invoke('projects:list'),
+    create: (name) => ipcRenderer.invoke('projects:create', { name }),
+    open: (path) => ipcRenderer.invoke('projects:open', { path }),
+  },
+  files: {
+    tree: () => ipcRenderer.invoke('files:tree'),
+    read: (path) => ipcRenderer.invoke('files:read', { path }),
+    save: (path, content) => ipcRenderer.invoke('files:save', { path, content }),
+    create: (path) => ipcRenderer.invoke('files:create', { path }),
+    mkdir: (path) => ipcRenderer.invoke('files:mkdir', { path }),
+    rename: (from, to) => ipcRenderer.invoke('files:rename', { from, to }),
+    remove: (path) => ipcRenderer.invoke('files:delete', { path }),
+    // Resolve a dropped File to its absolute path (Electron removed File.path; this is the
+    // supported webUtils replacement). Runs in the preload, returns '' for non-disk files.
+    pathForFile: (file) => { try { return webUtils.getPathForFile(file); } catch (_) { return ''; } },
+  },
+  // Document ingestion: add CSV / Excel / JSON to the project, with schema detection.
+  datasets: {
+    list: () => ipcRenderer.invoke('datasets:list'),
+    add: (paths) => ipcRenderer.invoke('datasets:add', { paths }),   // already-on-disk paths (drag-drop)
+    import: () => ipcRenderer.invoke('datasets:import'),             // open the native file picker
+    remove: (id) => ipcRenderer.invoke('datasets:remove', { id }),
+    reanalyze: (id) => ipcRenderer.invoke('datasets:reanalyze', { id }),
+  },
+  run: {
+    input: (text) => ipcRenderer.invoke('run:input', { text }),
+    stop: () => ipcRenderer.invoke('run:stop'),
+  },
+  terminal: {
+    exec: (command) => ipcRenderer.invoke('terminal:exec', { command }),
+    input: (data) => ipcRenderer.invoke('terminal:input', { data }),
+    interrupt: () => ipcRenderer.invoke('terminal:interrupt'),
+    cwd: () => ipcRenderer.invoke('terminal:cwd'),
+  },
+  dialog: {
+    pickModel: () => ipcRenderer.invoke('dialog:pickModel'),
+    pickPython: () => ipcRenderer.invoke('dialog:pickPython'),
+  },
+  shell: {
+    openPath: (p) => ipcRenderer.invoke('shell:openPath', { path: p }),
+    showWorkspace: () => ipcRenderer.invoke('shell:showWorkspace'),
+    openExternal: (url) => ipcRenderer.invoke('shell:openExternal', { url }),
+  },
+  clipboard: {
+    readText: () => ipcRenderer.invoke('clipboard:read'),
+    writeText: (text) => ipcRenderer.invoke('clipboard:write', { text }),
+  },
+  // Generic, allowlisted event subscription. Returns an unsubscribe function.
+  on: (channel, handler) => {
+    if (!EVENT_CHANNELS.has(channel)) {
+      throw new Error(`Channel not allowed: ${channel}`);
+    }
+    const listener = (_e, payload) => handler(payload);
+    ipcRenderer.on(channel, listener);
+    return () => ipcRenderer.removeListener(channel, listener);
+  },
+});

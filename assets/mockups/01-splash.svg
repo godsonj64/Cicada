@@ -1,0 +1,39 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1000" height="640" viewBox="0 0 1000 640" font-family="Inter, -apple-system, 'Segoe UI', sans-serif">
+  <defs>
+    <path id="garm-d" fill-rule="evenodd" d="M 66.54 24.28 A 69.28 69.28 0 0 1 94.20 72.20 A 11.00 11.00 0 0 1 87.66 83.52 A 69.28 69.28 0 0 1 32.34 83.52 A 11.00 11.00 0 0 1 25.80 72.20 A 69.28 69.28 0 0 1 53.46 24.28 A 11.00 11.00 0 0 1 66.54 24.28 Z M 63.25 41.62 A 35.51 35.51 0 0 1 77.54 66.37 A 5.50 5.50 0 0 1 74.29 72.01 A 35.51 35.51 0 0 1 45.71 72.01 A 5.50 5.50 0 0 1 42.46 66.37 A 35.51 35.51 0 0 1 56.75 41.62 A 5.50 5.50 0 0 1 63.25 41.62 Z"/>
+    <linearGradient id="g1" x1="20" y1="16" x2="100" y2="104" gradientUnits="userSpaceOnUse"><stop offset="0%" stop-color="#D9FFFB"/><stop offset="18%" stop-color="#5CFFF2"/><stop offset="42%" stop-color="#00B8FF"/><stop offset="70%" stop-color="#005BFF"/><stop offset="100%" stop-color="#02091A"/></linearGradient>
+    <radialGradient id="h1" cx="31" cy="20" r="76" gradientUnits="userSpaceOnUse"><stop offset="0%" stop-color="#FFFFFF" stop-opacity="0.94"/><stop offset="24%" stop-color="#B8FFF8" stop-opacity="0.66"/><stop offset="52%" stop-color="#00C8FF" stop-opacity="0.34"/><stop offset="78%" stop-color="#005BFF" stop-opacity="0.15"/><stop offset="100%" stop-color="#02091A" stop-opacity="0"/></radialGradient>
+    <linearGradient id="g2" x1="20" y1="16" x2="100" y2="104" gradientUnits="userSpaceOnUse"><stop offset="0%" stop-color="#BFDFFF"/><stop offset="20%" stop-color="#5A9DFF"/><stop offset="44%" stop-color="#185CFF"/><stop offset="70%" stop-color="#1026A8"/><stop offset="100%" stop-color="#030516"/></linearGradient>
+    <radialGradient id="h2" cx="31" cy="20" r="76" gradientUnits="userSpaceOnUse"><stop offset="0%" stop-color="#FFFFFF" stop-opacity="0.88"/><stop offset="24%" stop-color="#BFDFFF" stop-opacity="0.58"/><stop offset="50%" stop-color="#2D74FF" stop-opacity="0.32"/><stop offset="78%" stop-color="#152AAE" stop-opacity="0.16"/><stop offset="100%" stop-color="#030516" stop-opacity="0"/></radialGradient>
+    <linearGradient id="g3" x1="20" y1="16" x2="100" y2="104" gradientUnits="userSpaceOnUse"><stop offset="0%" stop-color="#E2D6FF"/><stop offset="20%" stop-color="#8C7CFF"/><stop offset="44%" stop-color="#4B4DFF"/><stop offset="70%" stop-color="#2220B8"/><stop offset="100%" stop-color="#060018"/></linearGradient>
+    <radialGradient id="h3" cx="31" cy="20" r="76" gradientUnits="userSpaceOnUse"><stop offset="0%" stop-color="#FFFFFF" stop-opacity="0.90"/><stop offset="24%" stop-color="#E2D6FF" stop-opacity="0.58"/><stop offset="50%" stop-color="#6C6BFF" stop-opacity="0.32"/><stop offset="76%" stop-color="#3023C8" stop-opacity="0.17"/><stop offset="100%" stop-color="#060018" stop-opacity="0"/></radialGradient>
+    <linearGradient id="g4" x1="20" y1="16" x2="100" y2="104" gradientUnits="userSpaceOnUse"><stop offset="0%" stop-color="#D6FFF2"/><stop offset="22%" stop-color="#58FFD6"/><stop offset="46%" stop-color="#00BFA5"/><stop offset="72%" stop-color="#005D70"/><stop offset="100%" stop-color="#021112"/></linearGradient>
+    <radialGradient id="h4" cx="31" cy="20" r="76" gradientUnits="userSpaceOnUse"><stop offset="0%" stop-color="#FFFFFF" stop-opacity="0.90"/><stop offset="26%" stop-color="#B7FFE9" stop-opacity="0.56"/><stop offset="52%" stop-color="#00CBB2" stop-opacity="0.30"/><stop offset="78%" stop-color="#006777" stop-opacity="0.15"/><stop offset="100%" stop-color="#021112" stop-opacity="0"/></radialGradient>
+    <linearGradient id="g5" x1="20" y1="16" x2="100" y2="104" gradientUnits="userSpaceOnUse"><stop offset="0%" stop-color="#B8F4FF"/><stop offset="20%" stop-color="#38D6FF"/><stop offset="42%" stop-color="#276BFF"/><stop offset="68%" stop-color="#7A3CFF"/><stop offset="100%" stop-color="#070014"/></linearGradient>
+    <radialGradient id="h5" cx="31" cy="20" r="76" gradientUnits="userSpaceOnUse"><stop offset="0%" stop-color="#FFFFFF" stop-opacity="0.91"/><stop offset="24%" stop-color="#B8F4FF" stop-opacity="0.58"/><stop offset="50%" stop-color="#3180FF" stop-opacity="0.33"/><stop offset="76%" stop-color="#7A3CFF" stop-opacity="0.19"/><stop offset="100%" stop-color="#070014" stop-opacity="0"/></radialGradient>
+    <clipPath id="weave"><use href="#garm-d" transform="rotate(300 60 60) translate(32 4) scale(0.4666667)"/></clipPath>
+    <symbol id="mark" viewBox="0 0 120 120"><use href="#garm-d" fill="currentColor"/></symbol>
+    <symbol id="lv1" viewBox="0 0 120 120"><use href="#garm-d" fill="url(#g1)"/><use href="#garm-d" fill="url(#h1)" opacity="0.82"/></symbol>
+    <symbol id="lv2" viewBox="0 0 120 120"><use href="#garm-d" fill="url(#g2)"/><use href="#garm-d" fill="url(#h2)" opacity="0.82"/></symbol>
+    <symbol id="lv3" viewBox="0 0 120 120"><use href="#garm-d" fill="url(#g3)"/><use href="#garm-d" fill="url(#h3)" opacity="0.82"/></symbol>
+    <symbol id="lv4" viewBox="0 0 120 120"><use href="#garm-d" fill="url(#g4)"/><use href="#garm-d" fill="url(#h4)" opacity="0.82"/></symbol>
+    <symbol id="lv5" viewBox="0 0 120 120"><use href="#garm-d" fill="url(#g5)"/><use href="#garm-d" fill="url(#h5)" opacity="0.82"/></symbol>
+    <symbol id="flower" viewBox="0 0 120 120">
+      <g transform="rotate(0 60 60)"><use href="#lv1" x="32" y="4" width="56" height="56"/></g>
+      <g transform="rotate(60 60 60)"><use href="#lv2" x="32" y="4" width="56" height="56"/></g>
+      <g transform="rotate(120 60 60)"><use href="#lv3" x="32" y="4" width="56" height="56"/></g>
+      <g transform="rotate(180 60 60)"><use href="#lv4" x="32" y="4" width="56" height="56"/></g>
+      <g transform="rotate(240 60 60)"><use href="#lv5" x="32" y="4" width="56" height="56"/></g>
+      <g transform="rotate(300 60 60)"><use href="#mark" x="32" y="4" width="56" height="56"/></g>
+      <g clip-path="url(#weave)"><use href="#lv1" x="32" y="4" width="56" height="56"/></g>
+    </symbol>
+    <radialGradient id="splashbg" cx="50%" cy="38%" r="75%"><stop offset="0%" stop-color="#16161c"/><stop offset="62%" stop-color="#0a0a0d"/><stop offset="100%" stop-color="#050506"/></radialGradient>
+    <filter id="glow" x="-60%" y="-60%" width="220%" height="220%"><feDropShadow dx="0" dy="0" stdDeviation="16" flood-color="#000000" flood-opacity="0.42"/></filter>
+  </defs>
+
+  <rect width="1000" height="640" fill="url(#splashbg)"/>
+  <use href="#flower" x="434" y="218" width="132" height="132" color="#f4f4f7" filter="url(#glow)"/>
+  <text x="500" y="402" text-anchor="middle" font-size="16" font-weight="640" letter-spacing="6.7" fill="#f5f5f7" fill-opacity="0.85">CICADA</text>
+
+  <text x="22" y="624" font-size="12" fill="#f5f5f7" fill-opacity="0.30">Cicada · Loading splash (#splash) — flower mark spins up, then cross-fades into the app</text>
+</svg>
