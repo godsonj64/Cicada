@@ -6,7 +6,8 @@ const path = require('path');
 const { pathToFileURL } = require('url');
 
 const configMod = require('./config');
-const { LlamaServer } = require('./llama');
+const { LlamaServer, resolveBinary } = require('./llama');
+const llamaInstaller = require('./llama-installer');
 const { Pipeline } = require('./pipeline');
 const { ContextMemory } = require('./memory');
 const { streamChat } = require('./llm');
@@ -14,6 +15,7 @@ const python = require('./python');
 const { Terminal } = require('./terminal');
 const projects = require('./projects');
 const datasets = require('./datasets');
+const github = require('./github');
 
 let mainWindow = null;
 let config = configMod.load();
@@ -157,21 +159,52 @@ function runFileStreaming(file, opts = {}) {
 }
 
 function createWindow() {
-  mainWindow = new BrowserWindow({
+  const isMac = process.platform === 'darwin';
+  const winOpts = {
     width: 1440,
     height: 900,
     minWidth: 1040,
     minHeight: 680,
     backgroundColor: '#0e1116',
     title: 'Cicada',
-    titleBarStyle: 'hiddenInset',
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
       nodeIntegration: false,
       spellcheck: false,
     },
-  });
+  };
+  // macOS keeps its inset traffic lights over our custom top bar; Windows/Linux get a
+  // frameless window so the OS title bar doesn't sit above our themed header (the app
+  // draws its own minimize/maximize/close controls instead — see the renderer).
+  if (isMac) winOpts.titleBarStyle = 'hiddenInset';
+  else winOpts.frame = false;
+  // Trailer-capture mode: fill the screen and stay on top so a full-desktop screen
+  // recording captures nothing but the app (gdigrab can't BitBlt a GPU-composited window
+  // directly, but the composited desktop records cleanly).
+  const trailerMode = !!process.env.GARM_TRAILER;
+  if (trailerMode) { winOpts.fullscreen = true; winOpts.alwaysOnTop = true; winOpts.show = false; }
+  mainWindow = new BrowserWindow(winOpts);
+
+  // The `fullscreen`/`alwaysOnTop` constructor options are requests, not guarantees — the OS
+  // compositor's exclusive-fullscreen transition and window-raise can lag behind window
+  // creation by up to a second or so. A screen-recording capture has no way to know when that
+  // has actually finished, so force it deterministically: hold the window hidden until it is
+  // ready to paint, then show + focus + raise it, and re-assert on every focus loss (some
+  // desktop capturers themselves briefly steal focus).
+  if (trailerMode) {
+    mainWindow.once('ready-to-show', () => {
+      mainWindow.show();
+      mainWindow.setAlwaysOnTop(true, 'screen-saver');
+      mainWindow.focus();
+      mainWindow.moveTop();
+    });
+    mainWindow.on('blur', () => { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.moveTop(); });
+  }
+
+  // Keep the custom maximize/restore glyph in sync with the real window state.
+  mainWindow.on('maximize', () => send('window:state', { maximized: true }));
+  mainWindow.on('unmaximize', () => send('window:state', { maximized: false }));
   mainWindow.loadFile(path.join(__dirname, '..', 'renderer', 'index.html'));
   mainWindow.on('closed', () => { mainWindow = null; });
 
@@ -254,12 +287,54 @@ function currentStatus() {
 
 function pushStatus() { send('llama:status', currentStatus()); }
 
+let installingLlama = false;
+
+// First-run convenience: if local inference is selected but no llama-server binary can be
+// found anywhere, auto-download a prebuilt llama.cpp release and record its path in config.
+// Streams progress to the renderer via 'llama:install'. Returns true once a binary is usable.
+async function ensureLlamaBinary() {
+  if (config.provider !== 'local') return true;
+  // Pick the best compute backend for this machine (CUDA on an NVIDIA GPU, Metal on Apple
+  // Silicon, else CPU). Reuse the recorded binary only when it already matches that backend
+  // — so a machine that gained a GPU (or a CPU-only first install) transparently upgrades.
+  const backend = llamaInstaller.detectBackend();
+  if (config.llamaBackend === backend && resolveBinary(config.llamaServerPath)) return true;
+  if (installingLlama) return false;
+  installingLlama = true;
+  try {
+    const label = backend === 'cuda' ? 'CUDA' : backend === 'metal' ? 'Metal' : 'CPU';
+    send('llama:install', { state: 'query', detail: `Setting up llama.cpp (${label})…`, percent: null });
+    // ensureLlamaServer emits its own 'done' progress event, which is relayed below —
+    // so we don't send another here (that would fire the "installed" toast twice).
+    const bin = await llamaInstaller.ensureLlamaServer({ backend, onProgress: (p) => send('llama:install', p) });
+    if (bin) {
+      config = configMod.save({ llamaServerPath: bin, llamaBackend: backend });
+      if (llama) llama.config = config;
+      return true;
+    }
+    return false;
+  } catch (e) {
+    send('llama:install', { state: 'error', detail: e.message, percent: null });
+    if (llama) { llama.status = 'error'; llama.lastError = 'llama.cpp setup failed: ' + e.message; }
+    pushStatus();
+    return false;
+  } finally {
+    installingLlama = false;
+  }
+}
+
+// Ensure a binary (auto-downloading if needed), then start the local server.
+async function startLocalLlama() {
+  const ok = await ensureLlamaBinary();
+  if (ok) llama.start(); else pushStatus();
+}
+
 function setupLlama() {
   llama = new LlamaServer(config);
   // In local mode the pill tracks the server; in deepseek mode currentStatus() ignores it.
   llama.on('status', () => pushStatus());
   llama.on('log', (line) => send('llama:log', { line }));
-  if (config.provider === 'local') llama.start();
+  if (config.provider === 'local') startLocalLlama();
   else pushStatus(); // deepseek: don't spin up a local server; report key/model status
 }
 
@@ -338,7 +413,7 @@ function registerIpc() {
     // Provider switch: start the local server when going local, stop it (free the RAM)
     // when going to the hosted DeepSeek API.
     if (config.provider !== prevProvider) {
-      if (config.provider === 'local') llama.start(); else llama.stop();
+      if (config.provider === 'local') startLocalLlama(); else llama.stop();
     }
     pushStatus(); // reflect provider / key / model changes in the status pill
     return config;
@@ -361,6 +436,16 @@ function registerIpc() {
       title: 'Select a GGUF model',
       properties: ['openFile'],
       filters: [{ name: 'GGUF model', extensions: ['gguf'] }],
+    });
+    if (r.canceled || !r.filePaths.length) return null;
+    return r.filePaths[0];
+  });
+
+  ipcMain.handle('dialog:pickLlamaServer', async () => {
+    const r = await dialog.showOpenDialog(mainWindow, {
+      title: 'Select the llama-server binary',
+      properties: ['openFile'],
+      message: 'Choose the llama-server executable from a llama.cpp build.',
     });
     if (r.canceled || !r.filePaths.length) return null;
     return r.filePaths[0];
@@ -625,6 +710,61 @@ function registerIpc() {
     send('datasets:update', datasets.list(config.workspaceDir));
     return { datasets: datasets.list(config.workspaceDir) };
   });
+
+  // ----- GitHub integration (scoped to the active project) -----
+  ipcMain.handle('github:status', () => github.status(config.workspaceDir));
+  ipcMain.handle('github:verifyToken', async (_e, { token }) => {
+    const r = await github.verifyToken(token);
+    if (r.ok) config = configMod.save({ githubToken: token.trim() }); // remember a working token
+    return r;
+  });
+  ipcMain.handle('github:generateFiles', (_e, opts) => {
+    const r = github.generateFiles(config.workspaceDir, {
+      projectName: path.basename(config.workspaceDir),
+      ...(opts || {}),
+    });
+    return { ...r, tree: projects.tree(config.workspaceDir) };
+  });
+  ipcMain.handle('github:commit', async (_e, { message }) => {
+    const r = await github.commitAll(config.workspaceDir, message);
+    return { ...r, status: await github.status(config.workspaceDir) };
+  });
+  ipcMain.handle('github:publish', async (_e, opts) => {
+    const o = opts || {};
+    const token = (o.token || config.githubToken || '').trim();
+    if (o.token && o.token.trim() !== config.githubToken) config = configMod.save({ githubToken: o.token.trim() });
+    const result = await github.publish(config.workspaceDir, {
+      ...o,
+      token,
+      repoName: github.repoNameFor(o.repoName || path.basename(config.workspaceDir)),
+    }, (progress) => send('github:progress', progress));
+    return { ...result, status: await github.status(config.workspaceDir), tree: projects.tree(config.workspaceDir) };
+  });
+  ipcMain.handle('github:push', async (_e, { message }) => {
+    const token = (config.githubToken || '').trim();
+    if (!token) return { ok: false, error: 'Add a GitHub token first.' };
+    const st = await github.status(config.workspaceDir);
+    if (!st.isRepo || !st.remoteUrl) return { ok: false, error: 'This project has no GitHub remote yet — use Publish first.' };
+    send('github:progress', { step: 'commit', state: 'running', detail: null });
+    const commit = await github.commitAll(config.workspaceDir, message || 'Update from Cicada');
+    if (!commit.ok) { send('github:progress', { step: 'commit', state: 'error', detail: commit.error }); return { ok: false, error: commit.error }; }
+    send('github:progress', { step: 'commit', state: 'done', detail: commit.nothingToCommit ? 'Nothing new to commit.' : 'Changes committed.' });
+    send('github:progress', { step: 'push', state: 'running', detail: null });
+    const pushed = await github.push(config.workspaceDir, { remoteUrl: st.remoteUrl, token, branch: st.branch || 'main' });
+    send('github:progress', { step: 'push', state: pushed.ok ? 'done' : 'error', detail: pushed.ok ? ('Pushed to ' + st.webUrl) : pushed.error });
+    return { ...pushed, status: await github.status(config.workspaceDir) };
+  });
+
+  // ----- Custom window controls (frameless on Windows/Linux) -----
+  ipcMain.handle('window:minimize', () => { if (mainWindow) mainWindow.minimize(); return true; });
+  ipcMain.handle('window:maximize', () => {
+    if (!mainWindow) return false;
+    if (mainWindow.isMaximized()) mainWindow.unmaximize(); else mainWindow.maximize();
+    return mainWindow.isMaximized();
+  });
+  ipcMain.handle('window:close', () => { if (mainWindow) mainWindow.close(); return true; });
+  ipcMain.handle('window:isMaximized', () => !!(mainWindow && mainWindow.isMaximized()));
+  ipcMain.handle('window:platform', () => process.platform);
 
   ipcMain.handle('shell:openPath', (_e, { path: p }) => shell.openPath(p));
   ipcMain.handle('shell:showWorkspace', () => shell.openPath(config.workspaceDir));
