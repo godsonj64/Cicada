@@ -15,10 +15,19 @@ const IMAGE_EXTS = new Set(['.png', '.jpg', '.jpeg', '.gif', '.svg', '.bmp', '.w
 const CPU_PROBE_MS = 2500;
 const CPU_PROGRESS_SECONDS = 0.25;
 
-// Cumulative CPU time (seconds) a process has used so far, read via `ps`. Returns null if the
-// process can't be read (already gone, or ps unavailable), in which case the watchdog falls back
-// to terminating on idle.
+// Cumulative CPU time (seconds) a process has used so far, read via `ps` (POSIX) or
+// PowerShell (Windows). Returns null if the process can't be read (already gone, or the
+// probe tool is unavailable), in which case the watchdog falls back to terminating on idle.
 function cpuSecondsOf(pid) {
+  if (process.platform === 'win32') {
+    try {
+      const out = execFileSync('powershell.exe',
+        ['-NoLogo', '-NoProfile', '-Command', `(Get-Process -Id ${Number(pid)}).TotalProcessorTime.TotalSeconds`],
+        { encoding: 'utf8', timeout: 4000, windowsHide: true }).trim();
+      const secs = parseFloat(out);
+      return Number.isFinite(secs) ? secs : null;
+    } catch (_) { return null; }
+  }
   try {
     const out = execFileSync('ps', ['-o', 'time=', '-p', String(pid)], { encoding: 'utf8' }).trim();
     if (!out) return null;
@@ -372,7 +381,7 @@ function detectEnvironment({ pythonPath }) {
 function discoverInterpreters(workspaceDir) {
   const found = new Map(); // path -> {kind, hint}
   const add = (p, kind) => { if (p && !found.has(p)) found.set(p, { kind }); };
-  const venvPython = (dir) => path.join(dir, 'bin', 'python'); // macOS/Linux layout
+  const venvPython = (dir) => venvInterpreter(dir);
 
   if (process.env.VIRTUAL_ENV) add(venvPython(process.env.VIRTUAL_ENV), 'venv');
   if (process.env.CONDA_PREFIX) add(venvPython(process.env.CONDA_PREFIX), 'conda');
@@ -408,6 +417,17 @@ function discoverInterpreters(workspaceDir) {
   return out;
 }
 
+// Interpreter path inside a venv/conda prefix: bin/python on POSIX, Scripts\python.exe
+// on Windows (conda on Windows puts python.exe at the prefix root, tried as a fallback).
+function venvInterpreter(dir) {
+  if (process.platform === 'win32') {
+    const scripts = path.join(dir, 'Scripts', 'python.exe');
+    if (fs.existsSync(scripts)) return scripts;
+    return path.join(dir, 'python.exe');
+  }
+  return path.join(dir, 'bin', 'python');
+}
+
 function labelFor(p, kind) {
   if (kind === 'venv') return `venv · ${path.basename(path.dirname(path.dirname(p)))}`;
   if (kind === 'conda') return `conda · ${path.basename(path.dirname(path.dirname(p)))}`;
@@ -433,7 +453,7 @@ function createVenv({ pythonPath, dir, onData }) {
     proc.stderr.on('data', (d) => { err += d.toString(); onData && onData('stderr', d.toString()); });
     proc.on('error', (e) => { onData && onData('stderr', `venv failed: ${e.message}\n`); resolve({ ok: false, error: e.message }); });
     proc.on('exit', (code) => {
-      const python = path.join(dir, 'bin', 'python');
+      const python = venvInterpreter(dir);
       const ok = code === 0 && fs.existsSync(python);
       if (ok) onData && onData('stdout', `Created venv at ${dir}\n`);
       resolve({ ok, python: ok ? python : null, error: ok ? null : (err.trim() || `exit ${code}`) });

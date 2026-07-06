@@ -259,12 +259,7 @@
       garm.code.run(window.GARMEditor.getValue(), activeFile);
     });
     $('#btn-stop').addEventListener('click', function () { garm.run.stop(); });
-    $('#btn-save').addEventListener('click', function () {
-      garm.code.save(window.GARMEditor.getValue(), activeFile).then(function (p) {
-        loadedFile = activeFile;
-        flashTab('console'); appendConsole('Saved ' + p + '\n', false, true); switchDock('console');
-      });
-    });
+    $('#btn-save').addEventListener('click', function () { saveActiveFile(); });
     $('#btn-compile').addEventListener('click', function () {
       switchDock('problems');
       var prob = $('#problems');
@@ -531,6 +526,244 @@
     });
   }
 
+  // ---- Toast notifications -------------------------------------------------
+  // Transient, non-blocking feedback for actions (save, publish, errors) so the user
+  // is never forced to hunt through the Console tab to learn whether something worked.
+  function toast(message, kind, ms) {
+    var host = $('#toasts');
+    if (!host) return;
+    var el = document.createElement('div');
+    el.className = 'toast toast-' + (kind || 'info');
+    el.textContent = message;
+    el.addEventListener('click', function () { dismiss(); });
+    host.appendChild(el);
+    requestAnimationFrame(function () { el.classList.add('show'); });
+    var t = setTimeout(dismiss, ms || (kind === 'err' ? 6000 : 3200));
+    function dismiss() {
+      clearTimeout(t);
+      el.classList.remove('show');
+      setTimeout(function () { if (el.parentNode) el.parentNode.removeChild(el); }, 300);
+    }
+  }
+
+  // ---- GitHub integration --------------------------------------------------
+  var ghState = null;   // last github:status snapshot
+  var ghUser = null;    // verified account { login, name } once connected
+  var ghBusy = false;
+  var GH_STEP_NAMES = { git: 'Repository', files: 'Required files', commit: 'Commit', repo: 'GitHub repo', push: 'Push' };
+
+  function ghSummaryText() {
+    if (!ghState) return 'Checking repository status…';
+    if (!ghState.gitInstalled) return 'git is not installed';
+    if (!ghState.isRepo) return 'Not a git repository yet · git ' + ghState.gitVersion;
+    var bits = [ghState.branch || 'main'];
+    bits.push(ghState.changeCount === 0 ? 'clean' : ghState.changeCount + ' change' + (ghState.changeCount === 1 ? '' : 's'));
+    if (ghState.webUrl) bits.push(ghState.webUrl.replace(/^https:\/\//, ''));
+    return bits.join(' · ');
+  }
+
+  function loadGitHubStatus() {
+    return garm.github.status().then(function (st) {
+      ghState = st;
+      renderGitHub();
+      return st;
+    });
+  }
+
+  function ghBadge() {
+    var b = $('#gh-badge');
+    if (!b) return;
+    var n = ghState && ghState.isRepo ? ghState.changeCount : 0;
+    b.textContent = n > 99 ? '99+' : String(n);
+    b.classList.toggle('hidden', !n);
+  }
+
+  function renderGitHub() {
+    $('#gh-summary').textContent = ghSummaryText();
+    $('#btn-gh-open').classList.toggle('hidden', !(ghState && ghState.webUrl));
+    ghBadge();
+    var body = $('#gh-body');
+    if (!ghState) { body.innerHTML = '<div class="empty-hint">Checking git and repository status…</div>'; return; }
+
+    var html = '';
+    if (!ghState.gitInstalled) {
+      html += '<div class="gh-card gh-card-warn"><div class="gh-card-title">git is not installed</div>' +
+        '<div class="gh-card-sub">Cicada’s GitHub integration uses your own git. Install it from ' +
+        '<a href="#" id="gh-git-link">git-scm.com/downloads</a>, then hit Refresh.</div></div>';
+      body.innerHTML = html;
+      var gl = $('#gh-git-link');
+      if (gl) gl.addEventListener('click', function (e) { e.preventDefault(); garm.shell.openExternal('https://git-scm.com/downloads'); });
+      return;
+    }
+
+    // Account: connected chip, or token entry.
+    if (ghUser) {
+      html += '<div class="gh-card"><div class="gh-card-title">Account</div>' +
+        '<div class="gh-account"><span class="gh-avatar-dot"></span>Connected as <b>' + escapeHtml(ghUser.login) + '</b>' +
+        '<button id="btn-gh-disconnect" class="btn btn-ghost btn-sm gh-right">Change token</button></div></div>';
+    } else {
+      html += '<div class="gh-card"><div class="gh-card-title">Connect your GitHub account</div>' +
+        '<div class="gh-card-sub">Paste a personal access token with the <code>repo</code> scope. It is stored only on this machine and sent only to github.com. ' +
+        '<a href="#" id="gh-token-link">Create a token →</a></div>' +
+        '<div class="gh-row"><input id="gh-token" type="password" placeholder="ghp_… or github_pat_…" spellcheck="false" autocomplete="off" />' +
+        '<button id="btn-gh-connect" class="btn btn-accent btn-sm">Connect</button></div></div>';
+    }
+
+    // Repository state.
+    if (ghState.isRepo) {
+      html += '<div class="gh-card"><div class="gh-card-title">Repository</div><div class="gh-kv">';
+      html += '<span>Branch</span><b>' + escapeHtml(ghState.branch || '—') + '</b>';
+      if (ghState.lastCommit) html += '<span>Last commit</span><b>' + escapeHtml(ghState.lastCommit.subject) + ' <i class="muted">' + escapeHtml(ghState.lastCommit.when) + '</i></b>';
+      if (ghState.remoteUrl) html += '<span>Remote</span><b class="gh-mono">' + escapeHtml(ghState.remoteUrl) + '</b>';
+      html += '</div>';
+      if (ghState.changeCount) {
+        var shown = ghState.changes.slice(0, 8);
+        html += '<div class="gh-changes"><div class="gh-card-sub">' + ghState.changeCount + ' uncommitted change' + (ghState.changeCount === 1 ? '' : 's') + ':</div>';
+        shown.forEach(function (c) { html += '<div class="gh-change"><span class="gh-chg-' + escapeHtml((c.status || '?').charAt(0)) + '">' + escapeHtml(c.status || '?') + '</span>' + escapeHtml(c.path) + '</div>'; });
+        if (ghState.changeCount > shown.length) html += '<div class="gh-change muted">+ ' + (ghState.changeCount - shown.length) + ' more…</div>';
+        html += '</div>';
+      } else if (ghState.hasCommits) {
+        html += '<div class="gh-card-sub gh-clean">Working tree clean — everything is committed.</div>';
+      }
+      html += '</div>';
+    }
+
+    // Publish (no remote yet) or Commit & Push (already linked).
+    if (!ghState.remoteUrl) {
+      var defName = (($('#project-name').textContent || 'cicada-project').trim()).replace(/[^A-Za-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '') || 'cicada-project';
+      html += '<div class="gh-card"><div class="gh-card-title">Publish to GitHub</div>' +
+        '<div class="gh-card-sub">One click: Cicada generates the required repo files (README.md, .gitignore, LICENSE, requirements.txt), initializes git, commits everything, creates the repository on your account, and pushes.</div>' +
+        '<div class="gh-form">' +
+        '<label>Repository name<input id="gh-name" type="text" value="' + escapeHtml(defName) + '" spellcheck="false" /></label>' +
+        '<label>Description<input id="gh-desc" type="text" placeholder="What does this project do? (used in the README too)" /></label>' +
+        '<label class="gh-check"><input id="gh-private" type="checkbox" checked /> Private repository</label>' +
+        '</div>' +
+        '<div class="gh-row gh-row-end">' +
+        '<button id="btn-gh-genfiles" class="btn btn-ghost btn-sm" title="Only generate README.md / .gitignore / LICENSE / requirements.txt into the project — no git required">Generate files only</button>' +
+        '<button id="btn-gh-publish" class="btn btn-accent btn-sm"' + (ghUser ? '' : ' disabled title="Connect your GitHub account first"') + '>Publish to GitHub</button>' +
+        '</div></div>';
+    } else {
+      html += '<div class="gh-card"><div class="gh-card-title">Sync</div>' +
+        '<div class="gh-row"><input id="gh-msg" type="text" placeholder="Commit message — e.g. “add plotting”" />' +
+        '<button id="btn-gh-pushall" class="btn btn-accent btn-sm"' + (ghUser ? '' : ' disabled title="Connect your GitHub account first"') + '>Commit &amp; Push</button></div>' +
+        '<div class="gh-row gh-row-end"><button id="btn-gh-genfiles" class="btn btn-ghost btn-sm" title="Re-generate any missing repo files (existing files are never overwritten)">Generate missing repo files</button></div></div>';
+    }
+
+    // Progress steps (filled by github:progress while publishing/pushing).
+    html += '<div id="gh-steps" class="gh-steps"></div>';
+    body.innerHTML = html;
+
+    // Wire the freshly rendered controls.
+    var tl = $('#gh-token-link');
+    if (tl) tl.addEventListener('click', function (e) { e.preventDefault(); garm.shell.openExternal('https://github.com/settings/tokens/new?scopes=repo&description=Cicada%20IDE'); });
+    var conn = $('#btn-gh-connect');
+    if (conn) conn.addEventListener('click', ghConnect);
+    var tok = $('#gh-token');
+    if (tok) tok.addEventListener('keydown', function (e) { if (e.key === 'Enter') { e.preventDefault(); ghConnect(); } });
+    var disc = $('#btn-gh-disconnect');
+    if (disc) disc.addEventListener('click', function () { ghUser = null; renderGitHub(); });
+    var pub = $('#btn-gh-publish');
+    if (pub) pub.addEventListener('click', ghPublish);
+    var pushBtn = $('#btn-gh-pushall');
+    if (pushBtn) pushBtn.addEventListener('click', ghPush);
+    var msg = $('#gh-msg');
+    if (msg) msg.addEventListener('keydown', function (e) { if (e.key === 'Enter') { e.preventDefault(); ghPush(); } });
+    var gen = $('#btn-gh-genfiles');
+    if (gen) gen.addEventListener('click', ghGenerateFiles);
+  }
+
+  function ghConnect() {
+    var token = ($('#gh-token') ? $('#gh-token').value : '').trim();
+    if (!token) { $('#gh-token').focus(); return; }
+    $('#btn-gh-connect').disabled = true;
+    garm.github.verifyToken(token).then(function (r) {
+      if (r.ok) { ghUser = r; toast('Connected to GitHub as ' + r.login, 'ok'); renderGitHub(); }
+      else { toast(r.error || 'Could not verify the token.', 'err'); var b = $('#btn-gh-connect'); if (b) b.disabled = false; }
+    });
+  }
+
+  function ghStepUpdate(p) {
+    var host = $('#gh-steps');
+    if (!host) return;
+    var row = host.querySelector('[data-step="' + p.step + '"]');
+    if (!row) {
+      row = document.createElement('div');
+      row.className = 'gh-step';
+      row.dataset.step = p.step;
+      row.innerHTML = '<span class="gh-step-ico"></span><span class="gh-step-name">' + escapeHtml(GH_STEP_NAMES[p.step] || p.step) + '</span><span class="gh-step-detail"></span>';
+      host.appendChild(row);
+    }
+    row.className = 'gh-step gh-step-' + p.state;
+    row.querySelector('.gh-step-ico').textContent = p.state === 'done' ? '✓' : (p.state === 'error' ? '✕' : '…');
+    if (p.detail) row.querySelector('.gh-step-detail').textContent = p.detail;
+  }
+
+  function ghPublish() {
+    if (ghBusy || !ghUser) return;
+    var name = ($('#gh-name') ? $('#gh-name').value : '').trim();
+    if (!name) { $('#gh-name').focus(); return; }
+    ghBusy = true;
+    $('#btn-gh-publish').disabled = true;
+    var steps = $('#gh-steps'); if (steps) steps.innerHTML = '';
+    garm.github.publish({
+      repoName: name,
+      description: ($('#gh-desc') ? $('#gh-desc').value : '').trim(),
+      isPrivate: !!($('#gh-private') && $('#gh-private').checked),
+    }).then(function (res) {
+      ghBusy = false;
+      if (res.ok) {
+        toast('Published to GitHub: ' + res.htmlUrl, 'ok', 5000);
+        if (res.tree) renderTree(res.tree);
+        ghState = res.status; renderGitHub();
+      } else {
+        toast(res.error || 'Publishing failed.', 'err');
+        var b = $('#btn-gh-publish'); if (b) b.disabled = false;
+      }
+    }).catch(function (err) {
+      ghBusy = false;
+      toast(err.message, 'err');
+      var b = $('#btn-gh-publish'); if (b) b.disabled = false;
+    });
+  }
+
+  function ghPush() {
+    if (ghBusy || !ghUser) return;
+    ghBusy = true;
+    var b = $('#btn-gh-pushall'); if (b) b.disabled = true;
+    var steps = $('#gh-steps'); if (steps) steps.innerHTML = '';
+    flushEditor(); // push what's on screen, not a stale saved copy
+    garm.github.push(($('#gh-msg') ? $('#gh-msg').value : '').trim()).then(function (res) {
+      ghBusy = false;
+      if (res.ok) { toast('Pushed to GitHub.', 'ok'); ghState = res.status; renderGitHub(); }
+      else { toast(res.error || 'Push failed.', 'err'); var btn = $('#btn-gh-pushall'); if (btn) btn.disabled = false; }
+    }).catch(function (err) { ghBusy = false; toast(err.message, 'err'); var btn = $('#btn-gh-pushall'); if (btn) btn.disabled = false; });
+  }
+
+  function ghGenerateFiles() {
+    garm.github.generateFiles({}).then(function (res) {
+      if (res.written && res.written.length) toast('Generated: ' + res.written.join(', '), 'ok');
+      else toast('All repo files already exist — nothing to generate.', 'info');
+      if (res.tree) renderTree(res.tree);
+      loadGitHubStatus();
+    }).catch(function (err) { toast(err.message, 'err'); });
+  }
+
+  function wireGitHub() {
+    garm.on('github:progress', ghStepUpdate);
+    $('#btn-gh-refresh').addEventListener('click', loadGitHubStatus);
+    $('#btn-gh-open').addEventListener('click', function () { if (ghState && ghState.webUrl) garm.shell.openExternal(ghState.webUrl); });
+    // Re-check whenever the tab is opened (cheap: a couple of git subcommands).
+    var tab = document.querySelector('.dock-tab[data-tab="github"]');
+    if (tab) tab.addEventListener('click', function () { loadGitHubStatus(); });
+    // Reconnect silently with the saved token, then take the first status snapshot.
+    garm.config.get().then(function (cfg) {
+      if (cfg && cfg.githubToken) {
+        garm.github.verifyToken(cfg.githubToken).then(function (r) { if (r.ok) { ghUser = r; renderGitHub(); } });
+      }
+    });
+    loadGitHubStatus();
+  }
+
   // ---- Model status ------------------------------------------------------
   function applyStatus(status, detail) {
     var pill = $('#model-status');
@@ -547,14 +780,40 @@
     $('#btn-inpaint-apply').disabled = pipelineRunning || !modelReady;
   }
 
+  var llamaInstalling = false;
   function wireStatus() {
-    garm.on('llama:status', function (p) { applyStatus(p.status, p.detail); });
+    garm.on('llama:status', function (p) {
+      // While auto-downloading llama.cpp, keep the install progress in the pill until it
+      // finishes — don't let a stale 'stopped'/'error' snapshot overwrite it.
+      if (llamaInstalling && p.status !== 'ready') return;
+      applyStatus(p.status, p.detail);
+    });
     garm.on('llama:log', function () { /* available for a future logs panel */ });
+    // First-run llama.cpp auto-download: reflect each phase in the status pill.
+    garm.on('llama:install', function (p) {
+      var pill = $('#model-status');
+      var text = pill.querySelector('.status-text');
+      if (p.state === 'done') {
+        llamaInstalling = false;
+        toast('llama.cpp installed — starting the model…', 'ok');
+        return; // server-start status events take over from here
+      }
+      if (p.state === 'error') {
+        llamaInstalling = false;
+        applyStatus('error', p.detail);
+        toast('Could not set up llama.cpp: ' + p.detail, 'err');
+        return;
+      }
+      llamaInstalling = true;
+      modelReady = false;
+      pill.className = 'status-pill status-starting';
+      text.textContent = p.detail || 'Setting up llama.cpp…';
+    });
     garm.llama.info().then(function (info) { applyStatus(info.status, info.lastError); });
   }
 
   // ---- Settings ----------------------------------------------------------
-  var SERVER_FIELDS = ['modelPath', 'serverPort', 'contextSize', 'gpuLayers'];
+  var SERVER_FIELDS = ['modelPath', 'serverPort', 'contextSize', 'gpuLayers', 'llamaServerPath'];
 
   // Show the DeepSeek fields or the local-server fields depending on the chosen provider.
   function applyProviderVisibility(provider) {
@@ -570,6 +829,7 @@
       $('#cfg-deepseekModel').value = cfg.deepseekModel || 'deepseek-v4-flash';
       $('#cfg-deepseekApiKey').value = cfg.deepseekApiKey || '';
       $('#cfg-modelPath').value = cfg.modelPath;
+      $('#cfg-llamaServerPath').value = cfg.llamaServerPath || '';
       $('#cfg-serverPort').value = cfg.serverPort;
       $('#cfg-contextSize').value = cfg.contextSize;
       $('#cfg-gpuLayers').value = cfg.gpuLayers;
@@ -620,12 +880,16 @@
     $('#btn-pick-python').addEventListener('click', function () {
       garm.dialog.pickPython().then(function (p) { if (p) $('#cfg-pythonPath').value = p; });
     });
+    $('#btn-pick-llama').addEventListener('click', function () {
+      garm.dialog.pickLlamaServer().then(function (p) { if (p) $('#cfg-llamaServerPath').value = p; });
+    });
     $('#btn-save-settings').addEventListener('click', function () {
       var next = {
         provider: $('#cfg-provider').value,
         deepseekModel: $('#cfg-deepseekModel').value,
         deepseekApiKey: $('#cfg-deepseekApiKey').value.trim(),
         modelPath: $('#cfg-modelPath').value.trim(),
+        llamaServerPath: $('#cfg-llamaServerPath').value.trim(),
         serverPort: parseInt($('#cfg-serverPort').value, 10),
         contextSize: parseInt($('#cfg-contextSize').value, 10),
         gpuLayers: parseInt($('#cfg-gpuLayers').value, 10),
@@ -701,6 +965,26 @@
   // ---- Misc --------------------------------------------------------------
   function wireMisc() {
     $('#btn-workspace').addEventListener('click', function () { garm.shell.showWorkspace(); });
+  }
+
+  // ---- Custom window controls (frameless Windows/Linux title bar) ---------
+  function wireWindowControls() {
+    // Tag the body so CSS can show the controls, drop the macOS traffic-light inset,
+    // and (later) swap the maximize/restore glyph.
+    garm.window.platform().then(function (p) {
+      var cls = p === 'darwin' ? 'platform-mac' : (p === 'win32' ? 'platform-win' : 'platform-linux');
+      document.body.classList.add(cls);
+    });
+    $('#win-min').addEventListener('click', function () { garm.window.minimize(); });
+    $('#win-max').addEventListener('click', function () { garm.window.maximize(); });
+    $('#win-close').addEventListener('click', function () { garm.window.close(); });
+    // Double-clicking the drag region toggles maximize, matching native behaviour.
+    $('#topbar').addEventListener('dblclick', function (e) {
+      if (e.target.closest('button, input, .proj-switch, .status-pill')) return;
+      garm.window.maximize();
+    });
+    garm.on('window:state', function (s) { document.body.classList.toggle('window-maximized', !!s.maximized); });
+    garm.window.isMaximized().then(function (m) { document.body.classList.toggle('window-maximized', !!m); });
   }
 
   // ---- Projects + Files explorer ----------------------------------------
@@ -881,6 +1165,7 @@
     if (open) openFile(open); else { window.GARMEditor.setValue(''); setActiveFile('main.py'); }
     garm.memory.get().then(renderMemory);
     loadDatasets(); // refresh the Data tab for the newly opened project
+    loadGitHubStatus(); // repo state is per-project too
     $('#console').innerHTML = '';
   }
 
@@ -1700,6 +1985,150 @@
     setTimeout(wireOnboarding._open, 220);
   }
 
+  // ---- Command palette + global hotkeys ------------------------------------
+  // Ctrl/Cmd+Shift+P opens a fuzzy-searchable list of every IDE action, so nothing
+  // requires hunting through toolbars. Ctrl/Cmd+S saves quietly with a toast.
+  var paletteOpen = false;
+  var paletteSel = 0;
+  var paletteMatches = [];
+
+  function saveActiveFile() {
+    garm.code.save(window.GARMEditor.getValue(), activeFile).then(function () {
+      loadedFile = activeFile;
+      toast('Saved ' + activeFile, 'ok', 1600);
+    }).catch(function (err) { toast('Save failed: ' + err.message, 'err'); });
+  }
+
+  function paletteCommands() {
+    var cmds = [
+      { name: 'Agent: Run Pipeline', hint: 'Ctrl+↵', run: runPipeline },
+      { name: 'Agent: Cancel Pipeline', run: function () { garm.pipeline.cancel(); } },
+      { name: 'Agent: Edit Selection', hint: 'Ctrl+K', run: function () { openInpaint(); } },
+      { name: 'File: Save', hint: 'Ctrl+S', run: saveActiveFile },
+      { name: 'File: Run', run: function () { $('#btn-run').click(); } },
+      { name: 'File: Stop Running Program', run: function () { garm.run.stop(); } },
+      { name: 'File: Compile (Syntax Check)', run: function () { $('#btn-compile').click(); } },
+      { name: 'File: New File', run: function () { openNew('file'); } },
+      { name: 'File: New Folder', run: function () { openNew('dir'); } },
+      { name: 'File: Refresh Explorer', run: refreshTree },
+      { name: 'GitHub: Publish Project…', run: function () { switchDock('github'); loadGitHubStatus(); } },
+      { name: 'GitHub: Commit & Push…', run: function () { switchDock('github'); loadGitHubStatus(); } },
+      { name: 'GitHub: Generate Repo Files (README, .gitignore, LICENSE, requirements.txt)', run: ghGenerateFiles },
+      { name: 'Output Mode: Single File', run: function () { setOutputMode('single', true); toast('New programs will be a single main.py', 'info'); } },
+      { name: 'Output Mode: Multi-file Repo', run: function () { setOutputMode('repo', true); toast('New programs will be multi-file projects', 'info'); } },
+      { name: 'Settings', run: openSettings },
+      { name: 'Welcome Tour', run: function () { $('#btn-welcome').click(); } },
+      { name: 'Open Project Folder', run: function () { garm.shell.showWorkspace(); } },
+    ];
+    ['console', 'render', 'data', 'terminal', 'memory', 'env', 'github', 'problems', 'chat'].forEach(function (tab) {
+      cmds.push({ name: 'View: ' + tab.charAt(0).toUpperCase() + tab.slice(1) + ' Tab', run: function () { switchDock(tab); } });
+    });
+    return cmds;
+  }
+
+  // Subsequence fuzzy match; lower score = better (earlier, tighter matches win).
+  function fuzzyScore(query, text) {
+    var q = query.toLowerCase(), t = text.toLowerCase();
+    if (!q) return 0;
+    var qi = 0, score = 0, last = -1;
+    for (var ti = 0; ti < t.length && qi < q.length; ti++) {
+      if (t[ti] === q[qi]) {
+        score += (last >= 0 ? (ti - last - 1) : ti);
+        last = ti; qi++;
+      }
+    }
+    return qi === q.length ? score : -1;
+  }
+
+  function openPalette() {
+    paletteOpen = true;
+    $('#palette-overlay').classList.remove('hidden');
+    var input = $('#palette-input');
+    input.value = '';
+    renderPalette('');
+    setTimeout(function () { input.focus(); }, 0);
+  }
+  function closePalette() {
+    paletteOpen = false;
+    $('#palette-overlay').classList.add('hidden');
+  }
+
+  function renderPalette(query) {
+    var all = paletteCommands();
+    paletteMatches = all
+      .map(function (c) { return { cmd: c, score: fuzzyScore(query, c.name) }; })
+      .filter(function (m) { return m.score >= 0; })
+      .sort(function (a, b) { return a.score - b.score; })
+      .slice(0, 12);
+    paletteSel = 0;
+    var list = $('#palette-list');
+    list.innerHTML = '';
+    paletteMatches.forEach(function (m, i) {
+      var row = document.createElement('div');
+      row.className = 'palette-item' + (i === paletteSel ? ' sel' : '');
+      row.innerHTML = '<span>' + escapeHtml(m.cmd.name) + '</span>' + (m.cmd.hint ? '<kbd>' + escapeHtml(m.cmd.hint) + '</kbd>' : '');
+      row.addEventListener('click', function () { runPaletteItem(i); });
+      row.addEventListener('mousemove', function () { setPaletteSel(i); });
+      list.appendChild(row);
+    });
+    if (!paletteMatches.length) list.innerHTML = '<div class="palette-empty">No matching command</div>';
+  }
+
+  function setPaletteSel(i) {
+    paletteSel = i;
+    document.querySelectorAll('.palette-item').forEach(function (el, j) { el.classList.toggle('sel', j === i); });
+  }
+
+  function runPaletteItem(i) {
+    var m = paletteMatches[i];
+    closePalette();
+    if (m) setTimeout(function () { m.cmd.run(); }, 0);
+  }
+
+  function wirePalette() {
+    var input = $('#palette-input');
+    input.addEventListener('input', function () { renderPalette(input.value.trim()); });
+    input.addEventListener('keydown', function (e) {
+      if (e.key === 'ArrowDown') { e.preventDefault(); setPaletteSel(Math.min(paletteSel + 1, paletteMatches.length - 1)); }
+      else if (e.key === 'ArrowUp') { e.preventDefault(); setPaletteSel(Math.max(paletteSel - 1, 0)); }
+      else if (e.key === 'Enter') { e.preventDefault(); runPaletteItem(paletteSel); }
+      else if (e.key === 'Escape') { e.preventDefault(); closePalette(); }
+    });
+    $('#palette-overlay').addEventListener('mousedown', function (e) {
+      if (e.target === e.currentTarget) closePalette();
+    });
+  }
+
+  function wireHotkeys() {
+    window.addEventListener('keydown', function (e) {
+      var mod = e.metaKey || e.ctrlKey;
+      if (mod && e.shiftKey && (e.key === 'P' || e.key === 'p')) {
+        e.preventDefault(); e.stopPropagation();
+        if (paletteOpen) closePalette(); else openPalette();
+      } else if (mod && !e.shiftKey && (e.key === 's' || e.key === 'S')) {
+        e.preventDefault();
+        saveActiveFile();
+      }
+    }, true); // capture: fire even when Monaco has focus
+  }
+
+  // The UI ships with macOS key glyphs; swap them for Ctrl+ labels elsewhere.
+  function fixPlatformKeys() {
+    if (/Mac/i.test(navigator.platform)) return;
+    var swap = function (s) {
+      return s.replace(/⌘\s?↵/g, 'Ctrl+Enter').replace(/⌘K/g, 'Ctrl+K').replace(/⌘L/g, 'Ctrl+L').replace(/⌘/g, 'Ctrl+');
+    };
+    document.querySelectorAll('[title]').forEach(function (el) {
+      if (el.title.indexOf('⌘') >= 0) el.title = swap(el.title);
+    });
+    document.querySelectorAll('kbd').forEach(function (el) {
+      if (el.textContent.indexOf('⌘') >= 0) el.textContent = swap(el.textContent);
+    });
+    document.querySelectorAll('.chat-empty-sub, .onboard-p').forEach(function (el) {
+      if (el.innerHTML.indexOf('⌘') >= 0) el.innerHTML = swap(el.innerHTML);
+    });
+  }
+
   // ---- Loading splash ----------------------------------------------------
   // The overlay + spin animation are pure CSS (they start the moment the page
   // paints). Here we just fade it out once the workbench is ready — but never
@@ -1747,6 +2176,7 @@
     wireSplitters();
     wireOutputMode();
     wireMisc();
+    wireWindowControls();
     window.GARMEditor.init();
     wireInpaint();
     wireContextMenu();
@@ -1755,6 +2185,10 @@
     wireEnv();
     wireData();
     wireChat();
+    wireGitHub();
+    wirePalette();
+    wireHotkeys();
+    fixPlatformKeys();
     wireOnboarding();
     window.GARMTerm.init();
     applyStatus('starting');

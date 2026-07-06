@@ -1,14 +1,17 @@
 {
   "name": "garm-code",
   "productName": "Cicada",
-  "version": "0.1.0",
-  "description": "Cicada — an agentic Python IDE powered by a local GGUF model (mythos-nano).",
+  "version": "0.2.0",
+  "description": "Cicada — an agentic Python IDE powered by a local GGUF model (Qwen2.5-Coder 3B).",
   "main": "src/main/main.js",
   "author": "Cicada",
   "license": "MIT",
   "scripts": {
     "start": "electron .",
-    "check": "node scripts/check.js"
+    "check": "node scripts/check.js",
+    "icon": "electron scripts/make-icon.js",
+    "dist:win": "electron scripts/make-icon.js && electron-builder --win",
+    "dist": "electron-builder"
   },
   "dependencies": {
     "@xterm/addon-fit": "^0.10.0",
@@ -17,6 +20,50 @@
     "monaco-editor": "^0.52.2"
   },
   "devDependencies": {
-    "electron": "^33.2.1"
+    "electron": "^33.2.1",
+    "electron-builder": "^25.1.8"
+  },
+  "build": {
+    "appId": "com.cicada.ide",
+    "productName": "Cicada",
+    "artifactName": "${productName}-${version}-${os}-${arch}.${ext}",
+    "directories": {
+      "output": "release",
+      "buildResources": "build"
+    },
+    "asar": true,
+    "files": [
+      "src/**/*",
+      "assets/cicada-logo.svg",
+      "assets/cicada-onboarding.png",
+      "package.json"
+    ],
+    "win": {
+      "icon": "build/icon.png",
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "portable",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
+    },
+    "nsis": {
+      "artifactName": "${productName}-Setup-${version}-${arch}.${ext}",
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "shortcutName": "Cicada"
+    },
+    "portable": {
+      "artifactName": "${productName}-Portable-${version}-${arch}.${ext}"
+    }
   }
 }

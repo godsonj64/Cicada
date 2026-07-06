@@ -7,7 +7,7 @@
 **An agentic Python IDE that turns plain-English requests into runnable, executed code — powered entirely by a local model.**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](#license)
-[![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux-lightgrey.svg)](#requirements)
+[![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey.svg)](#requirements)
 [![Electron](https://img.shields.io/badge/Electron-33-47848F.svg?logo=electron&logoColor=white)](https://www.electronjs.org/)
 [![Python](https://img.shields.io/badge/Python-3-3776AB.svg?logo=python&logoColor=white)](https://www.python.org/)
 [![llama.cpp](https://img.shields.io/badge/llama.cpp-local%20inference-000000.svg)](https://github.com/ggerganov/llama.cpp)
@@ -63,12 +63,17 @@ bar).
 ## Highlights
 
 - 🔒 **100% local & offline** — inference runs through `llama-server` on `127.0.0.1`; nothing is uploaded.
+- 🚀 **Zero-setup first run** — if no `llama-server` is found, Cicada auto-downloads a prebuilt llama.cpp release for your platform, unzips it, and configures itself.
+- 🪟 **Native-feeling window** — a themed, frameless title bar with its own minimize/maximize/close controls (matching the app body) on Windows and Linux; macOS keeps its traffic lights.
 - 🧠 **Agentic, not one-shot** — a six-stage pipeline reviews, compiles, and runs the code it writes.
 - 📝 **Plain English → executed Python** — describe it, get runnable output, plots, and stdout/stderr.
 - 🗂️ **Single file or a real repo** — generate one `main.py` or a full multi-file project.
 - ✂️ **⌘K Edit Selection** — agentic inpainting that rewrites only the lines you select, safely.
 - 📊 **Bring your own data** — drag in CSV/Excel/JSON; the schema is analyzed locally and fed to the agent.
 - 🧩 **Frontier ML/DL ready** — uses whatever is installed (PyTorch, TensorFlow, JAX, scikit-learn, …).
+- 🐙 **One-click GitHub publishing** — Cicada generates the required repo files (README, .gitignore, LICENSE, requirements.txt), initializes git, commits, creates the repository on your account, and pushes.
+- ⌨️ **Command palette** — Ctrl/Cmd+Shift+P reaches every action; Ctrl/Cmd+S saves; feedback arrives as toasts.
+- 🪟 **Runs on Windows, macOS, and Linux** — with a packaged Windows installer (`npm run dist:win`).
 
 ## The Pipeline
 
@@ -135,6 +140,19 @@ final code is extracted from the answer's fenced block.
 - Integrated terminal (xterm.js) running in the workspace, with command history and `cd`
   persistence.
 - Compile (syntax) checks and a Problems panel.
+- **Full GitHub integration.** A **GitHub** dock tab connects to your account with a
+  personal access token (stored only on your machine, sent only to github.com). One
+  click **publishes** the active project: Cicada auto-generates the required files —
+  a `README.md` (with the project structure and run instructions), a Python
+  `.gitignore`, an MIT `LICENSE`, and a `requirements.txt` built by scanning your
+  imports and mapping them to real pip package names — then initializes git, commits,
+  creates the repository (private or public) on your account via the GitHub API, and
+  pushes. After that, **Commit &amp; Push** syncs changes; the tab shows the branch,
+  uncommitted changes, and the last commit, and the token is passed to git per-push
+  (never written into `.git/config`).
+- **Command palette** (Ctrl/Cmd+Shift+P): fuzzy-search every action — run, save,
+  publish, switch dock tabs, settings. **Ctrl/Cmd+S** saves; **toast notifications**
+  give non-blocking feedback for saves, publishes, and errors.
 - Settings for model path, server port, context size, GPU layers, sampling, and the
   number of auto-fix iterations.
 
@@ -152,12 +170,17 @@ final code is extracted from the answer's fenced block.
 
 ## Requirements
 
-- macOS (Apple Silicon recommended) or Linux.
-- `llama.cpp` providing `llama-server` on your `PATH`
-  (`brew install llama.cpp`). Override with `GARM_LLAMA_SERVER=/path/to/llama-server`.
+- Windows 10/11, macOS (Apple Silicon recommended), or Linux.
+- `llama.cpp` providing `llama-server`. **On first run Cicada downloads this for you
+  automatically** if it isn't already on your `PATH` — no manual step needed. To use an
+  existing build instead, put `llama-server` on your `PATH`
+  (macOS: `brew install llama.cpp`), set it in Settings, or override with
+  `GARM_LLAMA_SERVER=/path/to/llama-server`.
 - A `.gguf` model. Defaults to `~/Downloads/mythos-nano-Q4_K_M.gguf`; change it in Settings.
-- Python 3 on your `PATH` (used for compile + run).
+- Python 3 on your `PATH` (used for compile + run; `python` on Windows, `python3` elsewhere).
 - Node.js 18+ (for Electron).
+- `git` on your `PATH` for the GitHub integration (plus a GitHub personal access token
+  with the `repo` scope to publish).
 
 > **Note:** the `.gguf` model file and `config.json` are intentionally **not** committed to this
 > repository (the model is ~1.9 GB and exceeds GitHub's file-size limit). Download the model
@@ -178,6 +201,17 @@ editor and press **Run**.
 The workspace (generated `main.py`, outputs, plots) lives in
 `~/GARM Code/workspace`. Settings persist to `~/GARM Code/config.json`.
 
+### Build a Windows installer
+
+```bash
+npm install
+npm run dist:win
+```
+
+This renders the app icon from the logo SVG, then packages the app with
+[electron-builder](https://www.electron.build/): an NSIS installer
+(`Cicada-<version>-win-x64.exe`) and a portable single-file exe land in `release/`.
+
 ## Verify the core without the UI
 
 ```bash
@@ -186,6 +220,7 @@ node scripts/inpaint_test.js   # deterministic splice/indent + py_compile checks
 node scripts/memory_test.js    # persistent context-memory checks (no model)
 node scripts/llm_test.js       # response parsing incl. the <think>-leak guard (no model)
 node scripts/env_test.js       # library detection + ModuleNotFoundError -> pip mapping
+node scripts/github_test.js    # GitHub integration: requirements scan, file generation, git flow (needs git, no model)
 node scripts/headless_test.js "Print the first 10 Fibonacci numbers, one per line."
 node scripts/refine_test.js    # post-edit refine (needs the model)
 node scripts/inpaint_e2e.js    # end-to-end select-and-replace (needs the model)
@@ -207,7 +242,9 @@ src/main/        Electron main process
   pipeline.js    agentic orchestrator: create / refine / inpaint
   splice.js      pure region-splice + re-indent helpers (inpaint safety)
   memory.js      persistent context memory (workspace/.garm/memory.json)
+  llama-installer.js  first-run auto-download of a prebuilt llama.cpp release
   datasets.js    document ingestion: store + validate, schema detection, index (workspace/.garm/datasets.json)
+  github.js      GitHub integration: repo status, required-file generation, publish/push via git + REST API
   python.js      compile, run, matplotlib harness, env detect + pip install
   terminal.js    shell command-runner backend
   config.js      defaults + ~/GARM Code/config.json

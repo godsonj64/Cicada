@@ -130,6 +130,20 @@
     <button id="btn-settings" class="icon-btn" title="Settings" aria-label="Settings">
       <svg viewBox="0 0 24 24"><path d="M4 7h10M18 7h2M4 17h2M10 17h10" /><circle cx="16" cy="7" r="2.4" /><circle cx="8" cy="17" r="2.4" /></svg>
     </button>
+    <!-- Custom window controls — shown only on the frameless Windows/Linux window
+         (body.platform-win / .platform-linux); hidden on macOS (native traffic lights). -->
+    <div id="win-controls" class="win-controls">
+      <button id="win-min" class="win-ctl" title="Minimize" aria-label="Minimize">
+        <svg viewBox="0 0 12 12" aria-hidden="true"><path d="M2 6h8" /></svg>
+      </button>
+      <button id="win-max" class="win-ctl" title="Maximize" aria-label="Maximize">
+        <svg class="win-max-ico" viewBox="0 0 12 12" aria-hidden="true"><rect x="2.5" y="2.5" width="7" height="7" rx="1" /></svg>
+        <svg class="win-restore-ico" viewBox="0 0 12 12" aria-hidden="true"><rect x="2.5" y="3.8" width="5.7" height="5.7" rx="1" /><path d="M4.2 3.8V2.6a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v4a1 1 0 0 1-1 1H8.2" /></svg>
+      </button>
+      <button id="win-close" class="win-ctl win-close" title="Close" aria-label="Close">
+        <svg viewBox="0 0 12 12" aria-hidden="true"><path d="M3 3l6 6M9 3l-6 6" /></svg>
+      </button>
+    </div>
   </header>
 
   <!-- Main split: agent sidebar | editor + dock -->
@@ -225,6 +239,7 @@
           <button class="dock-tab" data-tab="terminal">Terminal</button>
           <button class="dock-tab" data-tab="memory">Memory</button>
           <button class="dock-tab" data-tab="env">Env</button>
+          <button class="dock-tab" data-tab="github">GitHub<span id="gh-badge" class="dock-badge hidden"></span></button>
           <button class="dock-tab" data-tab="problems">Problems</button>
           <button class="dock-tab dock-tab-chat" data-tab="chat"><svg class="chat-ico" viewBox="0 0 120 120" aria-hidden="true"><use href="#garm-chat-icon" /></svg>Chat</button>
           <div class="toolbar-spacer"></div>
@@ -287,6 +302,19 @@
               <div class="env-install">
                 <input id="env-install-input" type="text" placeholder="Install any package — e.g. tensorflow, jax, xgboost, seaborn, transformers" />
                 <button id="btn-env-install" class="btn btn-accent btn-sm">Install</button>
+              </div>
+            </div>
+          </div>
+          <div class="dock-pane" data-pane="github">
+            <div class="gh-wrap">
+              <div class="gh-head">
+                <span id="gh-summary" class="gh-summary">Checking repository status…</span>
+                <div class="toolbar-spacer"></div>
+                <button id="btn-gh-open" class="btn btn-ghost btn-sm hidden">Open on GitHub ↗</button>
+                <button id="btn-gh-refresh" class="btn btn-ghost btn-sm">Refresh</button>
+              </div>
+              <div class="gh-scroll" id="gh-body">
+                <div class="empty-hint">Checking git and repository status…</div>
               </div>
             </div>
           </div>
@@ -355,6 +383,13 @@
               <button id="btn-pick-model" class="btn btn-ghost btn-sm">Browse</button>
             </div>
           </label>
+          <label class="field">
+            <span>llama-server binary — <b>auto-downloaded on first run</b>; override to use your own build</span>
+            <div class="field-row">
+              <input id="cfg-llamaServerPath" type="text" placeholder="Auto-detected / downloaded to ~/GARM Code/llama.cpp" />
+              <button id="btn-pick-llama" class="btn btn-ghost btn-sm">Browse</button>
+            </div>
+          </label>
           <div class="field-grid">
             <label class="field"><span>Server port</span><input id="cfg-serverPort" type="number" /></label>
             <label class="field"><span>Context size</span><input id="cfg-contextSize" type="number" /></label>
@@ -368,7 +403,7 @@
           <label class="field"><span>Max fix iterations</span><input id="cfg-maxFixIterations" type="number" /></label>
         </div>
         <label class="field">
-          <span>Python interpreter — point at a venv's <code>bin/python</code> for an isolated environment</span>
+          <span>Python interpreter — point at a venv's <code>bin/python</code> (<code>Scripts\python.exe</code> on Windows) for an isolated environment</span>
           <div class="field-row">
             <input id="cfg-pythonPath" type="text" />
             <button id="btn-pick-python" class="btn btn-ghost btn-sm">Browse</button>
@@ -380,6 +415,17 @@
       <div class="modal-foot">
         <button id="btn-save-settings" class="btn btn-accent">Save &amp; Apply</button>
       </div>
+    </div>
+  </div>
+
+  <!-- Toast notifications: transient, non-blocking feedback (save, publish, errors). -->
+  <div id="toasts" class="toasts" aria-live="polite"></div>
+
+  <!-- Command palette (Ctrl/Cmd+Shift+P): fuzzy-searchable list of every IDE action. -->
+  <div id="palette-overlay" class="palette-overlay hidden">
+    <div class="palette" role="dialog" aria-label="Command palette">
+      <input id="palette-input" type="text" placeholder="Type a command… (Run, Save, Publish to GitHub, Settings…)" spellcheck="false" autocomplete="off" />
+      <div id="palette-list" class="palette-list"></div>
     </div>
   </div>
 

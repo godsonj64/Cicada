@@ -15,7 +15,8 @@ class Terminal extends EventEmitter {
   constructor(cwd) {
     super();
     this.cwd = cwd || os.homedir();
-    this.shell = process.env.SHELL || '/bin/zsh';
+    this.isWindows = process.platform === 'win32';
+    this.shell = this.isWindows ? 'powershell.exe' : (process.env.SHELL || '/bin/zsh');
     this.proc = null;
     this.pythonPath = null; // when set, the terminal "activates" this interpreter
   }
@@ -51,8 +52,19 @@ class Terminal extends EventEmitter {
     const marker = '__GARM_CWD__';
     // cd into tracked dir, run the command, then emit the resulting cwd so we can
     // track directory changes. The marker line is stripped from displayed output.
-    const wrapped = `cd ${shellQuote(this.cwd)} 2>/dev/null; ${command}\n__rc=$?; printf '\\n${marker}%s\\n' "$(pwd)"; exit $__rc`;
-    this.proc = spawn(this.shell, ['-lc', wrapped], { cwd: this.cwd, env: this._env() });
+    if (this.isWindows) {
+      // PowerShell equivalent of the POSIX wrapper below: run in the tracked cwd,
+      // then print the resulting location behind the marker so `cd` persists.
+      const psCwd = String(this.cwd).replace(/'/g, "''");
+      const wrapped =
+        `try { Set-Location -LiteralPath '${psCwd}' } catch {}; ${command}\n` +
+        `Write-Output ('${marker}' + (Get-Location).Path)`;
+      this.proc = spawn(this.shell, ['-NoLogo', '-NoProfile', '-Command', wrapped],
+        { cwd: this.cwd, env: this._env(), windowsHide: true });
+    } else {
+      const wrapped = `cd ${shellQuote(this.cwd)} 2>/dev/null; ${command}\n__rc=$?; printf '\\n${marker}%s\\n' "$(pwd)"; exit $__rc`;
+      this.proc = spawn(this.shell, ['-lc', wrapped], { cwd: this.cwd, env: this._env() });
+    }
 
     const handle = (buf) => {
       let text = buf.toString();
@@ -79,11 +91,22 @@ class Terminal extends EventEmitter {
   }
 
   interrupt() {
-    if (this.proc) { try { this.proc.kill('SIGINT'); } catch (_) { /* ignore */ } }
+    if (!this.proc) return;
+    if (this.isWindows) this._killTree();
+    else { try { this.proc.kill('SIGINT'); } catch (_) { /* ignore */ } }
   }
 
   kill() {
-    if (this.proc) { try { this.proc.kill('SIGKILL'); } catch (_) { /* ignore */ } this.proc = null; }
+    if (!this.proc) return;
+    if (this.isWindows) this._killTree();
+    else { try { this.proc.kill('SIGKILL'); } catch (_) { /* ignore */ } }
+    this.proc = null;
+  }
+
+  // Windows has no signals; taskkill /T takes down the shell and its children.
+  _killTree() {
+    try { spawn('taskkill', ['/pid', String(this.proc.pid), '/T', '/F'], { windowsHide: true }); }
+    catch (_) { try { this.proc.kill(); } catch (_) { /* ignore */ } }
   }
 }
 

@@ -81,7 +81,7 @@ ok('CRLF input handled', spliceRegion('a = 1\r\nb = 2\r\n', { startLine: 2, endL
 (async () => {
   console.log('py_compile — spliced results are valid Python');
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'garm-inpaint-'));
-  const cfgPy = 'python3';
+  const cfgPy = process.platform === 'win32' ? 'python' : 'python3';
   async function compiles(code) {
     const f = path.join(tmp, 't.py');
     fs.writeFileSync(f, code, 'utf8');

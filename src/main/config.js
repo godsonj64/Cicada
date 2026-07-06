@@ -7,8 +7,11 @@ const path = require('path');
 // Resolve the user's home directory in a portable way.
 const HOME = os.homedir();
 
-// Default GGUF model the app was built around. The user can change this in Settings.
-const DEFAULT_MODEL = path.join(HOME, 'Downloads', 'mythos-nano-Q4_K_M.gguf');
+// Default GGUF model the app ships with. Qwen2.5-Coder 3B (instruct, Q4_K_M, ~2 GB) is
+// the strongest small local coding model — fast and low-VRAM while still capable — so it
+// loads quickly on modest machines. The app looks for it in the user's Downloads folder.
+// The user can change this in Settings.
+const DEFAULT_MODEL = path.join(HOME, 'Downloads', 'qwen2.5-coder-3b-instruct-q4_k_m.gguf');
 
 const DEFAULTS = {
   // Inference backend: 'local' (llama-server + a GGUF on this machine) or 'deepseek'
@@ -21,6 +24,15 @@ const DEFAULTS = {
   deepseekModel: 'deepseek-v4-flash',
   // Path to the .gguf model file.
   modelPath: DEFAULT_MODEL,
+  // Explicit path to the llama-server binary. Empty by default; set automatically when
+  // Cicada auto-downloads llama.cpp on first run (see src/main/llama-installer.js), or
+  // point it at an existing build. Takes priority over PATH / well-known locations.
+  llamaServerPath: '',
+  // Which llama.cpp compute backend the auto-installer fetched: 'cuda' (NVIDIA GPU),
+  // 'metal' (Apple Silicon), or 'cpu'. Empty until first setup. On launch Cicada detects
+  // the machine's best backend and, if it differs from this, downloads the matching build
+  // so a CPU-only install upgrades to GPU automatically once a GPU is present.
+  llamaBackend: '',
   // Local port llama-server binds to.
   serverPort: 8127,
   // Context window passed to llama-server (-c).
@@ -56,8 +68,12 @@ const DEFAULTS = {
   workspaceDir: path.join(HOME, 'GARM Code', 'workspace'),
   // Root under which new projects are created (each project is a subdirectory).
   projectsRoot: path.join(HOME, 'GARM Code', 'projects'),
-  // Python interpreter used for compile + run.
-  pythonPath: 'python3',
+  // Python interpreter used for compile + run. Windows installs expose `python`
+  // (python3 is usually only a Microsoft Store alias stub there).
+  pythonPath: process.platform === 'win32' ? 'python' : 'python3',
+  // GitHub integration: a personal access token (classic or fine-grained with `repo`
+  // scope) used to create repositories and push. Stored locally in config.json only.
+  githubToken: '',
 };
 
 function configPath() {

@@ -5,4 +5,16 @@ workspace/
 .DS_Store
 dist/
 out/
+release/
+build/icon.png
 *.gguf
+
+# Trailer toolkit: downloaded ffmpeg, raw capture, and rendered output
+scripts/trailer/.bin/
+scripts/trailer/.work/
+scripts/trailer/out/
+scripts/trailer/.work-physics/
+scripts/trailer/out-physics/
+scripts/trailer/.work-splash/
+scripts/trailer/out-splash/
+scripts/trailer/music.wav
