@@ -6,21 +6,34 @@ const fs = require('fs');
 const path = require('path');
 
 // Common locations for the llama.cpp server binary (Homebrew on Apple Silicon / Intel,
-// plus a couple of conventional build output paths).
-const CANDIDATE_PATHS = [
-  '/opt/homebrew/bin/llama-server',
-  '/usr/local/bin/llama-server',
-  path.join(require('os').homedir(), '.local', 'bin', 'llama-server'),
-];
+// conventional build output paths, and typical Windows install/unzip locations).
+const HOME = require('os').homedir();
+const CANDIDATE_PATHS = process.platform === 'win32'
+  ? [
+      path.join(HOME, 'llama.cpp', 'llama-server.exe'),
+      path.join(HOME, 'llama.cpp', 'build', 'bin', 'Release', 'llama-server.exe'),
+      path.join(HOME, 'Downloads', 'llama.cpp', 'llama-server.exe'),
+      path.join(process.env.LOCALAPPDATA || path.join(HOME, 'AppData', 'Local'), 'llama.cpp', 'llama-server.exe'),
+      'C:\\llama.cpp\\llama-server.exe',
+    ]
+  : [
+      '/opt/homebrew/bin/llama-server',
+      '/usr/local/bin/llama-server',
+      path.join(HOME, '.local', 'bin', 'llama-server'),
+    ];
 
-function resolveBinary() {
+function resolveBinary(explicitPath) {
+  // An explicit path (e.g. the auto-downloaded copy recorded in config.llamaServerPath)
+  // wins over everything else.
+  if (explicitPath && fs.existsSync(explicitPath)) return explicitPath;
   if (process.env.GARM_LLAMA_SERVER && fs.existsSync(process.env.GARM_LLAMA_SERVER)) {
     return process.env.GARM_LLAMA_SERVER;
   }
-  // Try PATH via `which`.
+  // Try PATH via `which` (POSIX) / `where` (Windows).
   try {
-    const r = spawnSync('which', ['llama-server'], { encoding: 'utf8' });
-    const found = (r.stdout || '').trim();
+    const finder = process.platform === 'win32' ? 'where' : 'which';
+    const r = spawnSync(finder, ['llama-server'], { encoding: 'utf8' });
+    const found = (r.stdout || '').split(/\r?\n/)[0].trim();
     if (found && fs.existsSync(found)) return found;
   } catch (_) { /* ignore */ }
   for (const p of CANDIDATE_PATHS) {
@@ -35,9 +48,11 @@ class LlamaServer extends EventEmitter {
     this.config = config;
     this.proc = null;
     this.status = 'stopped'; // stopped | starting | ready | error
-    this.binary = resolveBinary();
+    this.binary = resolveBinary(config.llamaServerPath);
     this.lastError = null;
     this.logBuffer = [];
+    // Crash timestamps for the auto-restart guard (see the exit handler in start()).
+    this.crashTimes = [];
   }
 
   baseUrl() {
@@ -57,9 +72,11 @@ class LlamaServer extends EventEmitter {
 
   async start() {
     if (this.status === 'ready' || this.status === 'starting') return;
-    this.binary = resolveBinary();
+    this.binary = resolveBinary(this.config.llamaServerPath);
     if (!this.binary) {
-      this.lastError = 'llama-server binary not found. Install llama.cpp (e.g. `brew install llama.cpp`).';
+      this.lastError = process.platform === 'win32'
+        ? 'llama-server.exe not found. Download a llama.cpp release (github.com/ggerganov/llama.cpp/releases), unzip it, and add it to PATH or set GARM_LLAMA_SERVER.'
+        : 'llama-server binary not found. Install llama.cpp (e.g. `brew install llama.cpp`).';
       this._setStatus('error', this.lastError);
       return;
     }
@@ -75,19 +92,16 @@ class LlamaServer extends EventEmitter {
       '--host', '127.0.0.1',
       '--port', String(this.config.serverPort),
       '-c', String(this.config.contextSize),
+      // GPU offload. -ngl 99 offloads all layers when a GPU backend (CUDA/Metal) is
+      // active; with a CPU-only llama.cpp build the flag is simply ignored. The backend is
+      // chosen automatically at install time (see src/main/llama-installer.js).
       '-ngl', String(this.config.gpuLayers),
       '--no-webui',
-      // Keep <think> reasoning INLINE in message.content (don't split it into a separate
-      // reasoning_content field). GARM parses <think>…</think> itself for the live
-      // reasoning panel and code extraction; without this, reasoning models (e.g. the
-      // Qwopus coder) leave content empty during thinking and the panel stays blank.
+      // Keep any <think> reasoning INLINE in message.content (don't split it into a separate
+      // reasoning_content field). GARM parses <think>…</think> itself for the live reasoning
+      // panel and code extraction. Harmless for non-reasoning models (e.g. DeepSeek-Coder,
+      // the default), which simply never emit the tag.
       '--reasoning-format', 'none',
-      // Sampling defaults the renderer does NOT send per-request (it only sets
-      // temperature + top_p). The active model is Qwen3.5-based, which degrades and
-      // hallucinates at low temperature / unconstrained sampling — these match Qwen3's
-      // recommended thinking-mode recipe (temp≈0.6, top_p 0.95, top_k 20, min_p 0).
-      '--top-k', '20',
-      '--min-p', '0',
     ];
     this._log(`$ ${this.binary} ${args.join(' ')}`);
 
@@ -104,8 +118,25 @@ class LlamaServer extends EventEmitter {
       this._log(`llama-server exited (code=${code}, signal=${signal})`);
       this.proc = null;
       if (this.status !== 'stopped') {
-        this.lastError = `Server exited unexpectedly (code=${code})`;
-        this._setStatus('error', this.lastError);
+        // Unexpected exit (a crash, an OOM kill, a driver hiccup). Self-heal: restart
+        // automatically up to 3 times in a rolling 10-minute window, so a one-off crash
+        // never strands the user on a dead status pill. Repeated crashes stop retrying
+        // and surface the error (something is genuinely wrong — bad model file, OOM).
+        const now = Date.now();
+        this.crashTimes = this.crashTimes.filter((t) => now - t < 10 * 60 * 1000);
+        this.crashTimes.push(now);
+        if (this.crashTimes.length <= 3) {
+          this._log(`restarting llama-server automatically (attempt ${this.crashTimes.length}/3)…`);
+          this._setStatus('starting', 'Model crashed — restarting it…');
+          setTimeout(() => {
+            if (this.status === 'stopped' || this.proc) return; // user stopped it meanwhile
+            this.status = 'stopped'; // let start() proceed past its re-entry guard
+            this.start();
+          }, 1200);
+        } else {
+          this.lastError = `Server exited unexpectedly (code=${code}) and kept crashing after restarts. Check the model file and available memory.`;
+          this._setStatus('error', this.lastError);
+        }
       }
     });
     this.proc.on('error', (err) => {

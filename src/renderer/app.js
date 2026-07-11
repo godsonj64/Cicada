@@ -146,6 +146,9 @@
       setPipelineRunning(false); stopTimer();
       window.GARMEditor.finishStreaming(); // a crash mid-stream must not leave the editor blank
       appendConsole('\n[pipeline error] ' + p.message + '\n', true);
+      // Surface the failure where the user is looking, with one-click recovery.
+      toast('Agent run failed: ' + p.message, 'err', 9000,
+        lastAgentOp ? { label: 'Retry', run: retryLastAgentOp } : null);
     });
     garm.on('pipeline:log', function (p) { appendConsole('[log] ' + p + '\n', false, true); });
   }
@@ -191,7 +194,7 @@
 
   function wireRun() {
     garm.on('run:clear', function () { $('#console').innerHTML = ''; });
-    garm.on('run:started', function (p) { setCodeRunning(true); appendConsole('> python ' + (p.file ? p.file.split('/').pop() : 'main.py') + '\n', false, true); });
+    garm.on('run:started', function (p) { setCodeRunning(true); appendConsole('> python ' + (p.file ? p.file.split(/[\\/]/).pop() : 'main.py') + '\n', false, true); });
     garm.on('run:data', function (p) { appendConsole(p.text, p.stream === 'stderr'); });
     garm.on('run:exit', function (p) { setCodeRunning(false); appendConsole('\n[process exited with code ' + p.code + ']\n', false, true); });
     garm.on('run:images', function (p) { showImages(p.images); if (p.images && p.images.length) switchDock('render'); });
@@ -218,7 +221,7 @@
       var cap = document.createElement('figcaption');
       cap.className = 'muted small';
       cap.style.marginTop = '4px';
-      cap.textContent = img.path.split('/').pop();
+      cap.textContent = img.path.split(/[\\/]/).pop();
       el.onerror = function () { cap.textContent = '(could not load) ' + cap.textContent; cap.style.color = 'var(--danger)'; };
       fig.appendChild(el); fig.appendChild(cap);
       grid.appendChild(fig);
@@ -259,12 +262,7 @@
       garm.code.run(window.GARMEditor.getValue(), activeFile);
     });
     $('#btn-stop').addEventListener('click', function () { garm.run.stop(); });
-    $('#btn-save').addEventListener('click', function () {
-      garm.code.save(window.GARMEditor.getValue(), activeFile).then(function (p) {
-        loadedFile = activeFile;
-        flashTab('console'); appendConsole('Saved ' + p + '\n', false, true); switchDock('console');
-      });
-    });
+    $('#btn-save').addEventListener('click', function () { saveActiveFile(); });
     $('#btn-compile').addEventListener('click', function () {
       switchDock('problems');
       var prob = $('#problems');
@@ -296,10 +294,30 @@
     });
   }
 
+  // The last agent operation, so a failed run can be retried in one click from the
+  // error toast. Refine/inpaint re-read the CURRENT editor code at retry time (the
+  // pipeline restores the original code on failure, so it is the correct base).
+  var lastAgentOp = null;
+
+  function retryLastAgentOp() {
+    var op = lastAgentOp;
+    if (!op || pipelineRunning) return;
+    if (!modelReady) { toast('The model is not ready yet — watch the status pill.', 'info'); return; }
+    if (op.kind === 'create') { $('#prompt').value = op.req; runPipeline(); }
+    else if (op.kind === 'refine') {
+      garm.pipeline.refine(op.req, window.GARMEditor.getValue(), activeFile)
+        .catch(function (err) { appendConsole('\n[error] ' + err.message + '\n', true); setPipelineRunning(false); stopTimer(); });
+    } else if (op.kind === 'inpaint') {
+      garm.pipeline.inpaint(op.req, window.GARMEditor.getValue(), op.range, activeFile)
+        .catch(function (err) { appendConsole('\n[error] ' + err.message + '\n', true); setPipelineRunning(false); stopTimer(); });
+    }
+  }
+
   function runPipeline() {
     var req = $('#prompt').value.trim();
     if (!req) { $('#prompt').focus(); return; }
     if (!modelReady) return;
+    lastAgentOp = { kind: 'create', req: req };
     garm.pipeline.run(req).catch(function (err) { appendConsole('\n[error] ' + err.message + '\n', true); setPipelineRunning(false); stopTimer(); });
   }
 
@@ -309,6 +327,7 @@
     if (!req) { $('#refine-input').focus(); return; }
     if (!modelReady || pipelineRunning) return;
     var code = window.GARMEditor.getValue();
+    lastAgentOp = { kind: 'refine', req: req };
     garm.pipeline.refine(req, code, activeFile).catch(function (err) { appendConsole('\n[error] ' + err.message + '\n', true); setPipelineRunning(false); stopTimer(); });
     $('#refine-input').value = '';
   }
@@ -357,6 +376,7 @@
     var range = inpaintSelection.range;
     closeInpaint();
     switchDock('console');
+    lastAgentOp = { kind: 'inpaint', req: instr, range: range };
     garm.pipeline.inpaint(instr, code, range, activeFile).catch(function (err) {
       appendConsole('\n[error] ' + err.message + '\n', true); setPipelineRunning(false); stopTimer();
     });
@@ -531,30 +551,326 @@
     });
   }
 
+  // ---- Toast notifications -------------------------------------------------
+  // Transient, non-blocking feedback for actions (save, publish, errors) so the user
+  // is never forced to hunt through the Console tab to learn whether something worked.
+  // `action` ({ label, run }) renders a button inside the toast — used for one-click
+  // recovery ("Retry", "Restart model") right where the failure is reported.
+  function toast(message, kind, ms, action) {
+    var host = $('#toasts');
+    if (!host) return;
+    var el = document.createElement('div');
+    el.className = 'toast toast-' + (kind || 'info');
+    var msg = document.createElement('span');
+    msg.textContent = message;
+    el.appendChild(msg);
+    if (action && action.label && typeof action.run === 'function') {
+      var btn = document.createElement('button');
+      btn.className = 'toast-action';
+      btn.textContent = action.label;
+      btn.addEventListener('click', function (e) { e.stopPropagation(); dismiss(); action.run(); });
+      el.appendChild(btn);
+    }
+    el.addEventListener('click', function () { dismiss(); });
+    host.appendChild(el);
+    requestAnimationFrame(function () { el.classList.add('show'); });
+    var t = setTimeout(dismiss, ms || (kind === 'err' ? 6000 : 3200));
+    function dismiss() {
+      clearTimeout(t);
+      el.classList.remove('show');
+      setTimeout(function () { if (el.parentNode) el.parentNode.removeChild(el); }, 300);
+    }
+  }
+
+  // ---- GitHub integration --------------------------------------------------
+  var ghState = null;   // last github:status snapshot
+  var ghUser = null;    // verified account { login, name } once connected
+  var ghBusy = false;
+  var GH_STEP_NAMES = { git: 'Repository', files: 'Required files', commit: 'Commit', repo: 'GitHub repo', push: 'Push' };
+
+  function ghSummaryText() {
+    if (!ghState) return 'Checking repository status…';
+    if (!ghState.gitInstalled) return 'git is not installed';
+    if (!ghState.isRepo) return 'Not a git repository yet · git ' + ghState.gitVersion;
+    var bits = [ghState.branch || 'main'];
+    bits.push(ghState.changeCount === 0 ? 'clean' : ghState.changeCount + ' change' + (ghState.changeCount === 1 ? '' : 's'));
+    if (ghState.webUrl) bits.push(ghState.webUrl.replace(/^https:\/\//, ''));
+    return bits.join(' · ');
+  }
+
+  function loadGitHubStatus() {
+    return garm.github.status().then(function (st) {
+      ghState = st;
+      renderGitHub();
+      return st;
+    });
+  }
+
+  function ghBadge() {
+    var b = $('#gh-badge');
+    if (!b) return;
+    var n = ghState && ghState.isRepo ? ghState.changeCount : 0;
+    b.textContent = n > 99 ? '99+' : String(n);
+    b.classList.toggle('hidden', !n);
+  }
+
+  function renderGitHub() {
+    $('#gh-summary').textContent = ghSummaryText();
+    $('#btn-gh-open').classList.toggle('hidden', !(ghState && ghState.webUrl));
+    ghBadge();
+    var body = $('#gh-body');
+    if (!ghState) { body.innerHTML = '<div class="empty-hint">Checking git and repository status…</div>'; return; }
+
+    var html = '';
+    if (!ghState.gitInstalled) {
+      html += '<div class="gh-card gh-card-warn"><div class="gh-card-title">git is not installed</div>' +
+        '<div class="gh-card-sub">Cicada’s GitHub integration uses your own git. Install it from ' +
+        '<a href="#" id="gh-git-link">git-scm.com/downloads</a>, then hit Refresh.</div></div>';
+      body.innerHTML = html;
+      var gl = $('#gh-git-link');
+      if (gl) gl.addEventListener('click', function (e) { e.preventDefault(); garm.shell.openExternal('https://git-scm.com/downloads'); });
+      return;
+    }
+
+    // Account: connected chip, or token entry.
+    if (ghUser) {
+      html += '<div class="gh-card"><div class="gh-card-title">Account</div>' +
+        '<div class="gh-account"><span class="gh-avatar-dot"></span>Connected as <b>' + escapeHtml(ghUser.login) + '</b>' +
+        '<button id="btn-gh-disconnect" class="btn btn-ghost btn-sm gh-right">Change token</button></div></div>';
+    } else {
+      html += '<div class="gh-card"><div class="gh-card-title">Connect your GitHub account</div>' +
+        '<div class="gh-card-sub">Paste a personal access token with the <code>repo</code> scope. It is stored only on this machine and sent only to github.com. ' +
+        '<a href="#" id="gh-token-link">Create a token →</a></div>' +
+        '<div class="gh-row"><input id="gh-token" type="password" placeholder="ghp_… or github_pat_…" spellcheck="false" autocomplete="off" />' +
+        '<button id="btn-gh-connect" class="btn btn-accent btn-sm">Connect</button></div></div>';
+    }
+
+    // Repository state.
+    if (ghState.isRepo) {
+      html += '<div class="gh-card"><div class="gh-card-title">Repository</div><div class="gh-kv">';
+      html += '<span>Branch</span><b>' + escapeHtml(ghState.branch || '—') + '</b>';
+      if (ghState.lastCommit) html += '<span>Last commit</span><b>' + escapeHtml(ghState.lastCommit.subject) + ' <i class="muted">' + escapeHtml(ghState.lastCommit.when) + '</i></b>';
+      if (ghState.remoteUrl) html += '<span>Remote</span><b class="gh-mono">' + escapeHtml(ghState.remoteUrl) + '</b>';
+      html += '</div>';
+      if (ghState.changeCount) {
+        var shown = ghState.changes.slice(0, 8);
+        html += '<div class="gh-changes"><div class="gh-card-sub">' + ghState.changeCount + ' uncommitted change' + (ghState.changeCount === 1 ? '' : 's') + ':</div>';
+        shown.forEach(function (c) { html += '<div class="gh-change"><span class="gh-chg-' + escapeHtml((c.status || '?').charAt(0)) + '">' + escapeHtml(c.status || '?') + '</span>' + escapeHtml(c.path) + '</div>'; });
+        if (ghState.changeCount > shown.length) html += '<div class="gh-change muted">+ ' + (ghState.changeCount - shown.length) + ' more…</div>';
+        html += '</div>';
+      } else if (ghState.hasCommits) {
+        html += '<div class="gh-card-sub gh-clean">Working tree clean — everything is committed.</div>';
+      }
+      html += '</div>';
+    }
+
+    // Publish (no remote yet) or Commit & Push (already linked).
+    if (!ghState.remoteUrl) {
+      var defName = (($('#project-name').textContent || 'cicada-project').trim()).replace(/[^A-Za-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '') || 'cicada-project';
+      html += '<div class="gh-card"><div class="gh-card-title">Publish to GitHub</div>' +
+        '<div class="gh-card-sub">One click: Cicada generates the required repo files (README.md, .gitignore, LICENSE, requirements.txt), initializes git, commits everything, creates the repository on your account, and pushes.</div>' +
+        '<div class="gh-form">' +
+        '<label>Repository name<input id="gh-name" type="text" value="' + escapeHtml(defName) + '" spellcheck="false" /></label>' +
+        '<label>Description<input id="gh-desc" type="text" placeholder="What does this project do? (used in the README too)" /></label>' +
+        '<label class="gh-check"><input id="gh-private" type="checkbox" checked /> Private repository</label>' +
+        '</div>' +
+        '<div class="gh-row gh-row-end">' +
+        '<button id="btn-gh-genfiles" class="btn btn-ghost btn-sm" title="Only generate README.md / .gitignore / LICENSE / requirements.txt into the project — no git required">Generate files only</button>' +
+        '<button id="btn-gh-publish" class="btn btn-accent btn-sm"' + (ghUser ? '' : ' disabled title="Connect your GitHub account first"') + '>Publish to GitHub</button>' +
+        '</div></div>';
+    } else {
+      html += '<div class="gh-card"><div class="gh-card-title">Sync</div>' +
+        '<div class="gh-row"><input id="gh-msg" type="text" placeholder="Commit message — e.g. “add plotting”" />' +
+        '<button id="btn-gh-pushall" class="btn btn-accent btn-sm"' + (ghUser ? '' : ' disabled title="Connect your GitHub account first"') + '>Commit &amp; Push</button></div>' +
+        '<div class="gh-row gh-row-end"><button id="btn-gh-genfiles" class="btn btn-ghost btn-sm" title="Re-generate any missing repo files (existing files are never overwritten)">Generate missing repo files</button></div></div>';
+    }
+
+    // Progress steps (filled by github:progress while publishing/pushing).
+    html += '<div id="gh-steps" class="gh-steps"></div>';
+    body.innerHTML = html;
+
+    // Wire the freshly rendered controls.
+    var tl = $('#gh-token-link');
+    if (tl) tl.addEventListener('click', function (e) { e.preventDefault(); garm.shell.openExternal('https://github.com/settings/tokens/new?scopes=repo&description=Cicada%20IDE'); });
+    var conn = $('#btn-gh-connect');
+    if (conn) conn.addEventListener('click', ghConnect);
+    var tok = $('#gh-token');
+    if (tok) tok.addEventListener('keydown', function (e) { if (e.key === 'Enter') { e.preventDefault(); ghConnect(); } });
+    var disc = $('#btn-gh-disconnect');
+    if (disc) disc.addEventListener('click', function () { ghUser = null; renderGitHub(); });
+    var pub = $('#btn-gh-publish');
+    if (pub) pub.addEventListener('click', ghPublish);
+    var pushBtn = $('#btn-gh-pushall');
+    if (pushBtn) pushBtn.addEventListener('click', ghPush);
+    var msg = $('#gh-msg');
+    if (msg) msg.addEventListener('keydown', function (e) { if (e.key === 'Enter') { e.preventDefault(); ghPush(); } });
+    var gen = $('#btn-gh-genfiles');
+    if (gen) gen.addEventListener('click', ghGenerateFiles);
+  }
+
+  function ghConnect() {
+    var token = ($('#gh-token') ? $('#gh-token').value : '').trim();
+    if (!token) { $('#gh-token').focus(); return; }
+    $('#btn-gh-connect').disabled = true;
+    garm.github.verifyToken(token).then(function (r) {
+      if (r.ok) { ghUser = r; toast('Connected to GitHub as ' + r.login, 'ok'); renderGitHub(); }
+      else { toast(r.error || 'Could not verify the token.', 'err'); var b = $('#btn-gh-connect'); if (b) b.disabled = false; }
+    });
+  }
+
+  function ghStepUpdate(p) {
+    var host = $('#gh-steps');
+    if (!host) return;
+    var row = host.querySelector('[data-step="' + p.step + '"]');
+    if (!row) {
+      row = document.createElement('div');
+      row.className = 'gh-step';
+      row.dataset.step = p.step;
+      row.innerHTML = '<span class="gh-step-ico"></span><span class="gh-step-name">' + escapeHtml(GH_STEP_NAMES[p.step] || p.step) + '</span><span class="gh-step-detail"></span>';
+      host.appendChild(row);
+    }
+    row.className = 'gh-step gh-step-' + p.state;
+    row.querySelector('.gh-step-ico').textContent = p.state === 'done' ? '✓' : (p.state === 'error' ? '✕' : '…');
+    if (p.detail) row.querySelector('.gh-step-detail').textContent = p.detail;
+  }
+
+  function ghPublish() {
+    if (ghBusy || !ghUser) return;
+    var name = ($('#gh-name') ? $('#gh-name').value : '').trim();
+    if (!name) { $('#gh-name').focus(); return; }
+    ghBusy = true;
+    $('#btn-gh-publish').disabled = true;
+    var steps = $('#gh-steps'); if (steps) steps.innerHTML = '';
+    garm.github.publish({
+      repoName: name,
+      description: ($('#gh-desc') ? $('#gh-desc').value : '').trim(),
+      isPrivate: !!($('#gh-private') && $('#gh-private').checked),
+    }).then(function (res) {
+      ghBusy = false;
+      if (res.ok) {
+        toast('Published to GitHub: ' + res.htmlUrl, 'ok', 5000);
+        if (res.tree) renderTree(res.tree);
+        ghState = res.status; renderGitHub();
+      } else {
+        toast(res.error || 'Publishing failed.', 'err');
+        var b = $('#btn-gh-publish'); if (b) b.disabled = false;
+      }
+    }).catch(function (err) {
+      ghBusy = false;
+      toast(err.message, 'err');
+      var b = $('#btn-gh-publish'); if (b) b.disabled = false;
+    });
+  }
+
+  function ghPush() {
+    if (ghBusy || !ghUser) return;
+    ghBusy = true;
+    var b = $('#btn-gh-pushall'); if (b) b.disabled = true;
+    var steps = $('#gh-steps'); if (steps) steps.innerHTML = '';
+    flushEditor(); // push what's on screen, not a stale saved copy
+    garm.github.push(($('#gh-msg') ? $('#gh-msg').value : '').trim()).then(function (res) {
+      ghBusy = false;
+      if (res.ok) { toast('Pushed to GitHub.', 'ok'); ghState = res.status; renderGitHub(); }
+      else { toast(res.error || 'Push failed.', 'err'); var btn = $('#btn-gh-pushall'); if (btn) btn.disabled = false; }
+    }).catch(function (err) { ghBusy = false; toast(err.message, 'err'); var btn = $('#btn-gh-pushall'); if (btn) btn.disabled = false; });
+  }
+
+  function ghGenerateFiles() {
+    garm.github.generateFiles({}).then(function (res) {
+      if (res.written && res.written.length) toast('Generated: ' + res.written.join(', '), 'ok');
+      else toast('All repo files already exist — nothing to generate.', 'info');
+      if (res.tree) renderTree(res.tree);
+      loadGitHubStatus();
+    }).catch(function (err) { toast(err.message, 'err'); });
+  }
+
+  function wireGitHub() {
+    garm.on('github:progress', ghStepUpdate);
+    $('#btn-gh-refresh').addEventListener('click', loadGitHubStatus);
+    $('#btn-gh-open').addEventListener('click', function () { if (ghState && ghState.webUrl) garm.shell.openExternal(ghState.webUrl); });
+    // Re-check whenever the tab is opened (cheap: a couple of git subcommands).
+    var tab = document.querySelector('.dock-tab[data-tab="github"]');
+    if (tab) tab.addEventListener('click', function () { loadGitHubStatus(); });
+    // Reconnect silently with the saved token, then take the first status snapshot.
+    garm.config.get().then(function (cfg) {
+      if (cfg && cfg.githubToken) {
+        garm.github.verifyToken(cfg.githubToken).then(function (r) { if (r.ok) { ghUser = r; renderGitHub(); } });
+      }
+    });
+    loadGitHubStatus();
+  }
+
   // ---- Model status ------------------------------------------------------
   function applyStatus(status, detail) {
     var pill = $('#model-status');
     var text = pill.querySelector('.status-text');
     pill.className = 'status-pill status-' + (status || 'stopped');
     modelReady = status === 'ready';
-    if (status === 'starting') text.textContent = 'Loading model';
-    else if (status === 'ready') text.textContent = 'Model ready';
-    else if (status === 'error') text.textContent = 'Error: ' + (detail || 'see logs');
-    else text.textContent = 'Stopped';
+    if (status === 'starting') { text.textContent = detail && /restart|crash/i.test(detail) ? 'Restarting model…' : 'Loading model'; pill.title = detail || ''; }
+    else if (status === 'ready') { text.textContent = 'Model ready'; pill.title = detail || ''; }
+    else if (status === 'error') {
+      // Keep the pill readable; the full reason lives in the tooltip and the click
+      // action below offers one-click recovery.
+      var brief = String(detail || 'see logs');
+      text.textContent = 'Error: ' + (brief.length > 60 ? brief.slice(0, 57) + '…' : brief) + ' — click to retry';
+      pill.title = brief + '\nClick to retry (re-detects the binary and model, restarts the server).';
+    } else { text.textContent = 'Stopped — click to start'; pill.title = 'Click to start the local model.'; }
     $('#btn-run-pipeline').disabled = pipelineRunning || !modelReady;
     $('#btn-refine').disabled = pipelineRunning || !modelReady;
     $('#btn-edit-selection').disabled = pipelineRunning || !modelReady;
     $('#btn-inpaint-apply').disabled = pipelineRunning || !modelReady;
   }
 
+  var llamaInstalling = false;
+  var llamaRecovering = false;
   function wireStatus() {
-    garm.on('llama:status', function (p) { applyStatus(p.status, p.detail); });
+    garm.on('llama:status', function (p) {
+      // While auto-downloading llama.cpp, keep the install progress in the pill until it
+      // finishes — don't let a stale 'stopped'/'error' snapshot overwrite it.
+      if (llamaInstalling && p.status !== 'ready') return;
+      applyStatus(p.status, p.detail);
+    });
     garm.on('llama:log', function () { /* available for a future logs panel */ });
+    // First-run auto-setup (llama.cpp binary and/or the default model): reflect each
+    // phase in the status pill.
+    garm.on('llama:install', function (p) {
+      var pill = $('#model-status');
+      var text = pill.querySelector('.status-text');
+      if (p.state === 'done') {
+        llamaInstalling = false;
+        toast(p.detail === 'model' ? 'Model downloaded — starting it…' : 'llama.cpp installed — starting the model…', 'ok');
+        return; // server-start status events take over from here
+      }
+      if (p.state === 'error') {
+        llamaInstalling = false;
+        applyStatus('error', p.detail);
+        toast('Setup problem: ' + p.detail, 'err', 9000,
+          { label: 'Retry', run: function () { garm.llama.recover(); } });
+        return;
+      }
+      llamaInstalling = true;
+      modelReady = false;
+      pill.className = 'status-pill status-starting';
+      text.textContent = p.detail || 'Setting up llama.cpp…';
+    });
+    // Click the pill to self-heal: re-detect/download the binary and model, restart
+    // the server. Only meaningful when not already ready/starting.
+    $('#model-status').addEventListener('click', function () {
+      if (modelReady || llamaInstalling || llamaRecovering) return;
+      var pill = $('#model-status');
+      if (!/status-error|status-stopped/.test(pill.className)) return;
+      llamaRecovering = true;
+      applyStatus('starting', 'Recovering…');
+      garm.llama.recover().then(function (s) {
+        llamaRecovering = false;
+        if (s) applyStatus(s.status, s.detail);
+      }).catch(function () { llamaRecovering = false; });
+    });
     garm.llama.info().then(function (info) { applyStatus(info.status, info.lastError); });
   }
 
   // ---- Settings ----------------------------------------------------------
-  var SERVER_FIELDS = ['modelPath', 'serverPort', 'contextSize', 'gpuLayers'];
+  var SERVER_FIELDS = ['modelPath', 'serverPort', 'contextSize', 'gpuLayers', 'llamaServerPath'];
 
   // Show the DeepSeek fields or the local-server fields depending on the chosen provider.
   function applyProviderVisibility(provider) {
@@ -570,6 +886,7 @@
       $('#cfg-deepseekModel').value = cfg.deepseekModel || 'deepseek-v4-flash';
       $('#cfg-deepseekApiKey').value = cfg.deepseekApiKey || '';
       $('#cfg-modelPath').value = cfg.modelPath;
+      $('#cfg-llamaServerPath').value = cfg.llamaServerPath || '';
       $('#cfg-serverPort').value = cfg.serverPort;
       $('#cfg-contextSize').value = cfg.contextSize;
       $('#cfg-gpuLayers').value = cfg.gpuLayers;
@@ -620,12 +937,16 @@
     $('#btn-pick-python').addEventListener('click', function () {
       garm.dialog.pickPython().then(function (p) { if (p) $('#cfg-pythonPath').value = p; });
     });
+    $('#btn-pick-llama').addEventListener('click', function () {
+      garm.dialog.pickLlamaServer().then(function (p) { if (p) $('#cfg-llamaServerPath').value = p; });
+    });
     $('#btn-save-settings').addEventListener('click', function () {
       var next = {
         provider: $('#cfg-provider').value,
         deepseekModel: $('#cfg-deepseekModel').value,
         deepseekApiKey: $('#cfg-deepseekApiKey').value.trim(),
         modelPath: $('#cfg-modelPath').value.trim(),
+        llamaServerPath: $('#cfg-llamaServerPath').value.trim(),
         serverPort: parseInt($('#cfg-serverPort').value, 10),
         contextSize: parseInt($('#cfg-contextSize').value, 10),
         gpuLayers: parseInt($('#cfg-gpuLayers').value, 10),
@@ -701,6 +1022,26 @@
   // ---- Misc --------------------------------------------------------------
   function wireMisc() {
     $('#btn-workspace').addEventListener('click', function () { garm.shell.showWorkspace(); });
+  }
+
+  // ---- Custom window controls (frameless Windows/Linux title bar) ---------
+  function wireWindowControls() {
+    // Tag the body so CSS can show the controls, drop the macOS traffic-light inset,
+    // and (later) swap the maximize/restore glyph.
+    garm.window.platform().then(function (p) {
+      var cls = p === 'darwin' ? 'platform-mac' : (p === 'win32' ? 'platform-win' : 'platform-linux');
+      document.body.classList.add(cls);
+    });
+    $('#win-min').addEventListener('click', function () { garm.window.minimize(); });
+    $('#win-max').addEventListener('click', function () { garm.window.maximize(); });
+    $('#win-close').addEventListener('click', function () { garm.window.close(); });
+    // Double-clicking the drag region toggles maximize, matching native behaviour.
+    $('#topbar').addEventListener('dblclick', function (e) {
+      if (e.target.closest('button, input, .proj-switch, .status-pill')) return;
+      garm.window.maximize();
+    });
+    garm.on('window:state', function (s) { document.body.classList.toggle('window-maximized', !!s.maximized); });
+    garm.window.isMaximized().then(function (m) { document.body.classList.toggle('window-maximized', !!m); });
   }
 
   // ---- Projects + Files explorer ----------------------------------------
@@ -881,6 +1222,7 @@
     if (open) openFile(open); else { window.GARMEditor.setValue(''); setActiveFile('main.py'); }
     garm.memory.get().then(renderMemory);
     loadDatasets(); // refresh the Data tab for the newly opened project
+    loadGitHubStatus(); // repo state is per-project too
     $('#console').innerHTML = '';
   }
 
@@ -1369,6 +1711,7 @@
     h += '<button class="ds-name" data-ds-open="' + escapeHtml(d.file) + '" title="' + escapeHtml(d.file) + '">' + escapeHtml(d.name) + '</button>';
     h += '<span class="ds-status-dot ' + status + '" title="' + status + '"></span>';
     h += '<div class="ds-actions">';
+    if (d.status === 'ready' && !missing) h += dsActBtn('insights', d.id, 'Insights — distributions, correlations, quality flags', '<path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/>');
     if (d.status === 'error' && !missing) h += dsActBtn('reanalyze', d.id, 'Re-analyze', '<path d="M21 12a9 9 0 1 1-3-6.7"/><path d="M21 4v5h-5"/>');
     h += dsActBtn('remove', d.id, 'Remove from project', '<path d="M6 6l12 12M18 6L6 18"/>');
     h += '</div></div>';
@@ -1392,6 +1735,8 @@
       h += '<button class="ds-copy" data-ds-reanalyze="' + escapeHtml(d.id) + '">Re-analyze</button>';
       h += '</div></div>';
     }
+    // On-demand insights render into this container (kept across re-renders by id).
+    h += '<div class="ds-insights hidden" id="ds-ins-' + escapeHtml(d.id) + '"></div>';
     return h + '</div>';
   }
 
@@ -1488,9 +1833,10 @@
 
     // Delegated card actions: open, copy load-snippet, remove, re-analyze, install engine.
     $('#data-body').addEventListener('click', function (e) {
-      var t = e.target.closest('[data-ds-open],[data-ds-remove],[data-ds-reanalyze],[data-ds-copy],[data-ds-install]');
+      var t = e.target.closest('[data-ds-open],[data-ds-remove],[data-ds-reanalyze],[data-ds-copy],[data-ds-install],[data-ds-insights]');
       if (!t) return;
-      if (t.hasAttribute('data-ds-open')) { switchDock('console'); openFile(t.getAttribute('data-ds-open')); }
+      if (t.hasAttribute('data-ds-insights')) { toggleInsights(t.getAttribute('data-ds-insights')); }
+      else if (t.hasAttribute('data-ds-open')) { switchDock('console'); openFile(t.getAttribute('data-ds-open')); }
       else if (t.hasAttribute('data-ds-copy')) {
         garm.clipboard.writeText(decodeURIComponent(t.getAttribute('data-ds-copy')));
         var prev = t.textContent; t.textContent = 'Copied'; setTimeout(function () { t.textContent = prev; }, 1100);
@@ -1507,6 +1853,334 @@
 
     wireDragDrop();
     loadDatasets();
+  }
+
+  // ---- Dataset insights (distributions · correlations · quality flags) ----
+  // Rendered on demand into the dataset card. The heavy lifting (pandas or the
+  // pure-Node CSV fallback) happens in the main process; this only draws.
+  function sparkline(hist) {
+    var GLYPHS = ['▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
+    var max = 0;
+    (hist || []).forEach(function (v) { if (v > max) max = v; });
+    if (!max) return '';
+    return (hist || []).map(function (v) {
+      return GLYPHS[Math.min(GLYPHS.length - 1, Math.round((v / max) * (GLYPHS.length - 1)))];
+    }).join('');
+  }
+
+  function fmtStat(n) {
+    if (typeof n !== 'number' || !isFinite(n)) return '—';
+    if (Math.abs(n) >= 1000) return n.toLocaleString('en-US', { maximumFractionDigits: 0 });
+    return String(Math.round(n * 1000) / 1000);
+  }
+
+  function insightsHtml(res) {
+    var h = '<div class="ins-head">Insights · ' + fmtInt(res.rows) + ' rows'
+      + (res.sampled ? ' (sampled)' : '') + ' · engine: ' + escapeHtml(res.engine || '?') + '</div>';
+    if ((res.flags || []).length) {
+      h += '<div class="ins-flags">';
+      res.flags.forEach(function (f) { h += '<span class="ins-flag">⚠ ' + escapeHtml(f) + '</span>'; });
+      h += '</div>';
+    }
+    if ((res.columns || []).length) {
+      h += '<div class="ins-section-h">Numeric columns</div><table class="ins-table"><thead><tr>'
+        + '<th>column</th><th>distribution</th><th>mean</th><th>std</th><th>min</th><th>median</th><th>max</th><th>skew</th><th>missing</th></tr></thead><tbody>';
+      res.columns.forEach(function (c) {
+        h += '<tr><td class="ins-name">' + escapeHtml(c.name) + '</td>'
+          + '<td class="ins-spark" title="10-bin histogram">' + sparkline(c.hist) + '</td>'
+          + '<td>' + fmtStat(c.mean) + '</td><td>' + fmtStat(c.std) + '</td><td>' + fmtStat(c.min) + '</td>'
+          + '<td>' + fmtStat(c.median) + '</td><td>' + fmtStat(c.max) + '</td><td>' + fmtStat(c.skew) + '</td>'
+          + '<td>' + (c.missingPct >= 0.05 ? fmtStat(c.missingPct) + '%' : '0%') + '</td></tr>';
+      });
+      h += '</tbody></table>';
+    }
+    if ((res.correlations || []).length) {
+      h += '<div class="ins-section-h">Strongest correlations</div><div class="ins-corrs">';
+      res.correlations.forEach(function (p) {
+        var cls = Math.abs(p.r) >= 0.7 ? ' strong' : '';
+        h += '<span class="ins-corr' + cls + '">' + escapeHtml(p.a) + ' ↔ ' + escapeHtml(p.b)
+          + ' <b>' + (p.r > 0 ? '+' : '') + fmtStat(p.r) + '</b></span>';
+      });
+      h += '</div>';
+    }
+    if (!(res.columns || []).length && !(res.flags || []).length) {
+      h += '<div class="empty-hint">No numeric columns to profile in this file.</div>';
+    }
+    return h;
+  }
+
+  function toggleInsights(id) {
+    var box = document.getElementById('ds-ins-' + id);
+    if (!box) return;
+    if (!box.classList.contains('hidden')) { box.classList.add('hidden'); return; }
+    box.classList.remove('hidden');
+    if (box.dataset.loaded) return; // already fetched (cached in main anyway)
+    box.innerHTML = '<div class="empty-hint">Analyzing distributions and correlations…</div>';
+    garm.datasets.insights(id).then(function (res) {
+      if (!res || res.ok === false) {
+        box.innerHTML = '<div class="ds-error">' + escapeHtml((res && res.error) || 'Could not compute insights.') + '</div>';
+        return;
+      }
+      box.dataset.loaded = '1';
+      box.innerHTML = insightsHtml(res);
+    }).catch(function (err) {
+      box.innerHTML = '<div class="ds-error">' + escapeHtml(err.message) + '</div>';
+    });
+  }
+
+  // ---- Experiment tracker (Runs tab) --------------------------------------
+  var runsList = [];
+  var LOWER_BETTER = /loss|err|rmse|mse|mae|mape|perplexity|ppl/i;
+
+  function fmtDur(ms) {
+    if (ms == null) return '—';
+    if (ms < 1000) return ms + ' ms';
+    if (ms < 60000) return (ms / 1000).toFixed(1) + ' s';
+    return Math.floor(ms / 60000) + 'm ' + Math.round((ms % 60000) / 1000) + 's';
+  }
+
+  function timeAgo(iso) {
+    var d = new Date(iso).getTime();
+    if (!isFinite(d)) return '';
+    var s = Math.max(0, Math.round((Date.now() - d) / 1000));
+    if (s < 60) return s + 's ago';
+    if (s < 3600) return Math.floor(s / 60) + 'm ago';
+    if (s < 86400) return Math.floor(s / 3600) + 'h ago';
+    return Math.floor(s / 86400) + 'd ago';
+  }
+
+  // Per-metric best values across the history, so the table can badge them.
+  function bestMetricValues(runs) {
+    var best = {};
+    runs.forEach(function (r) {
+      Object.keys(r.metrics || {}).forEach(function (k) {
+        var v = r.metrics[k];
+        if (typeof v !== 'number') return;
+        if (!(k in best)) { best[k] = v; return; }
+        best[k] = LOWER_BETTER.test(k) ? Math.min(best[k], v) : Math.max(best[k], v);
+      });
+    });
+    return best;
+  }
+
+  function renderRuns(list) {
+    runsList = Array.isArray(list) ? list : [];
+    var badge = $('#runs-badge');
+    if (runsList.length) { badge.textContent = String(runsList.length); badge.classList.remove('hidden'); }
+    else badge.classList.add('hidden');
+    var body = $('#runs-body');
+    var summary = $('#runs-summary');
+    if (!runsList.length) {
+      summary.textContent = 'Every program run is recorded here with its metrics.';
+      body.innerHTML = '<div class="empty-hint">No runs yet. Run a program (or let the agent verify one) — Cicada parses metrics like <b>loss</b>, <b>accuracy</b>, <b>f1</b>, <b>rmse</b> straight from the output and tracks them across runs.</div>';
+      return;
+    }
+    var withMetrics = runsList.filter(function (r) { return Object.keys(r.metrics || {}).length; }).length;
+    summary.textContent = runsList.length + ' run' + (runsList.length > 1 ? 's' : '') + ' · ' + withMetrics + ' with metrics';
+    var best = bestMetricValues(runsList);
+    var h = '';
+    runsList.forEach(function (r) {
+      var ok = r.exitCode === 0;
+      h += '<div class="run-row' + (ok ? '' : ' failed') + '">';
+      h += '<span class="run-dot ' + (ok ? 'ok' : 'bad') + '" title="exit ' + escapeHtml(String(r.exitCode)) + '"></span>';
+      h += '<span class="run-file" title="' + escapeHtml(r.file) + '">' + escapeHtml(r.file) + '</span>';
+      h += '<span class="run-meta">' + escapeHtml(r.source) + ' · ' + escapeHtml(timeAgo(r.startedAt)) + ' · ' + escapeHtml(fmtDur(r.durationMs));
+      if (r.epochs != null) h += ' · ' + fmtInt(r.epochs) + ' epochs';
+      if (r.images) h += ' · ' + r.images + ' plot' + (r.images > 1 ? 's' : '');
+      h += '</span>';
+      h += '<span class="run-metrics">';
+      Object.keys(r.metrics || {}).forEach(function (k) {
+        var v = r.metrics[k];
+        var isBest = best[k] === v && runsList.length > 1;
+        h += '<span class="run-metric' + (isBest ? ' best' : '') + '" title="' + (isBest ? 'best across runs' : '') + '">'
+          + escapeHtml(k) + ' <b>' + fmtStat(v) + '</b>' + (isBest ? ' ★' : '') + '</span>';
+      });
+      h += '</span>';
+      h += '<button class="run-x" data-run-del="' + escapeHtml(r.id) + '" title="Delete this run">×</button>';
+      h += '</div>';
+    });
+    body.innerHTML = h;
+  }
+
+  function wireRuns() {
+    garm.on('experiments:update', renderRuns);
+    garm.experiments.list().then(renderRuns).catch(function () { /* ignore */ });
+    $('#runs-body').addEventListener('click', function (e) {
+      var t = e.target.closest('[data-run-del]');
+      if (!t) return;
+      garm.experiments.remove(t.getAttribute('data-run-del')).then(renderRuns);
+    });
+    $('#btn-runs-clear').addEventListener('click', function () {
+      garm.experiments.clear().then(renderRuns);
+    });
+    $('#btn-runs-export').addEventListener('click', function () {
+      garm.experiments.exportCsv().then(function (res) {
+        appendConsole('\n[runs] exported ' + res.path + '\n', false, true);
+        flashTab('runs');
+      }).catch(function (err) { appendConsole('\n[runs] export failed: ' + err.message + '\n', true); });
+    });
+  }
+
+  // ---- Project snapshots (History tab) -------------------------------------
+  function reloadActiveFile() {
+    if (!activeFile) { refreshTree(); return; }
+    garm.files.read(activeFile).then(function (res) {
+      if (res && res.openable !== false) { window.GARMEditor.setValue(res.content); loadedFile = res.path; }
+      refreshTree();
+    }).catch(function () { refreshTree(); });
+  }
+
+  function renderSnaps(list) {
+    var snaps = Array.isArray(list) ? list : [];
+    var body = $('#snap-body');
+    var summary = $('#snap-summary');
+    if (!snaps.length) {
+      summary.textContent = 'Checkpoints of your project source. One is taken automatically before every agent edit.';
+      body.innerHTML = '<div class="empty-hint">No snapshots yet. Cicada checkpoints your source before every agent operation, and you can snapshot manually before trying something risky. Restoring merges the snapshot back over the project (a safety snapshot is taken first).</div>';
+      return;
+    }
+    summary.textContent = snaps.length + ' snapshot' + (snaps.length > 1 ? 's' : '') + ' · newest first';
+    var h = '';
+    snaps.forEach(function (s) {
+      h += '<div class="snap-row">';
+      h += '<span class="snap-kind ' + (s.auto ? 'auto' : 'manual') + '">' + (s.auto ? 'auto' : 'manual') + '</span>';
+      h += '<span class="snap-label" title="' + escapeHtml(s.label) + '">' + escapeHtml(s.label) + '</span>';
+      h += '<span class="snap-meta">' + escapeHtml(timeAgo(s.createdAt)) + ' · ' + fmtInt(s.fileCount) + ' files · ' + fmtBytes(s.bytes) + '</span>';
+      h += '<button class="btn btn-ghost btn-sm" data-snap-restore="' + escapeHtml(s.id) + '" title="Merge this snapshot back over the project (a safety snapshot is taken first)">Restore</button>';
+      h += '<button class="run-x" data-snap-del="' + escapeHtml(s.id) + '" title="Delete this snapshot">×</button>';
+      h += '</div>';
+    });
+    body.innerHTML = h;
+  }
+
+  function wireHistory() {
+    garm.on('snapshots:update', renderSnaps);
+    garm.snapshots.list().then(renderSnaps).catch(function () { /* ignore */ });
+    $('#btn-snap-now').addEventListener('click', function () {
+      garm.snapshots.create('manual snapshot').then(function (res) {
+        renderSnaps(res.snapshots);
+        appendConsole('\n[history] snapshot saved' + (res.meta ? ' (' + res.meta.fileCount + ' files)' : '') + '\n', false, true);
+      }).catch(function (err) { appendConsole('\n[history] snapshot failed: ' + err.message + '\n', true); });
+    });
+    $('#snap-body').addEventListener('click', function (e) {
+      var t = e.target.closest('[data-snap-restore],[data-snap-del]');
+      if (!t) return;
+      if (t.hasAttribute('data-snap-del')) {
+        garm.snapshots.remove(t.getAttribute('data-snap-del')).then(renderSnaps);
+        return;
+      }
+      t.disabled = true;
+      garm.snapshots.restore(t.getAttribute('data-snap-restore')).then(function (res) {
+        renderSnaps(res.snapshots);
+        if (res.ok) {
+          appendConsole('\n[history] restored ' + res.restored + ' file' + (res.restored === 1 ? '' : 's') + ' — a safety snapshot of the previous state was saved.\n', false, true);
+          reloadActiveFile();
+        } else {
+          appendConsole('\n[history] restore failed: ' + (res.error || 'unknown error') + '\n', true);
+        }
+      }).catch(function (err) { appendConsole('\n[history] restore failed: ' + err.message + '\n', true); });
+    });
+  }
+
+  // ---- Dependency doctor (Env tab) -----------------------------------------
+  var doctorDeps = [];
+
+  function renderDoctor(res) {
+    var box = $('#doctor-body');
+    box.classList.remove('hidden');
+    if (!res) { box.innerHTML = '<div class="empty-hint">Scanning project imports…</div>'; return; }
+    doctorDeps = res.deps || [];
+    if (!doctorDeps.length) {
+      box.innerHTML = '<div class="doctor-head ok">✓ No third-party imports found in this project.</div>';
+      return;
+    }
+    var missing = res.missing || [];
+    var h = '<div class="doctor-head' + (missing.length ? ' warn' : ' ok') + '">'
+      + (missing.length
+        ? '⚠ ' + missing.length + ' of ' + doctorDeps.length + ' imported package' + (doctorDeps.length > 1 ? 's are' : ' is') + ' not installed'
+        : '✓ All ' + doctorDeps.length + ' imported packages are installed')
+      + (res.ok === false && res.error ? ' <span class="muted">(' + escapeHtml(res.error) + ')</span>' : '')
+      + '</div>';
+    h += '<div class="doctor-chips">';
+    doctorDeps.forEach(function (d) {
+      if (d.installed === false) {
+        h += '<span class="env-chip off"><span title="imported in: ' + escapeHtml((d.files || []).join(', ')) + '">' + escapeHtml(d.module) + '</span>'
+          + '<button class="env-add" data-doc-install="' + escapeHtml(d.pip) + '" title="pip install ' + escapeHtml(d.pip) + '">+</button></span>';
+      } else {
+        h += '<span class="env-chip on" title="imported in: ' + escapeHtml((d.files || []).join(', ')) + '">' + escapeHtml(d.module)
+          + (d.version ? ' <span class="env-ver">' + escapeHtml(d.version) + '</span>' : '') + '</span>';
+      }
+    });
+    h += '</div><div class="doctor-actions">';
+    if (missing.length) h += '<button id="btn-doctor-install-all" class="btn btn-accent btn-sm">Install all missing (' + missing.length + ')</button>';
+    h += '<button id="btn-doctor-reqs" class="btn btn-ghost btn-sm" title="Write requirements.txt pinned to the installed versions">Write requirements.txt</button>';
+    h += '</div>';
+    box.innerHTML = h;
+
+    box.querySelectorAll('[data-doc-install]').forEach(function (b) {
+      b.addEventListener('click', function () { startInstall(b.getAttribute('data-doc-install')); });
+    });
+    var all = box.querySelector('#btn-doctor-install-all');
+    if (all) {
+      all.addEventListener('click', function () {
+        all.disabled = true;
+        switchDock('console');
+        // Installs run strictly one at a time (pip is not concurrency-safe), then rescan.
+        var queue = missing.slice();
+        var next = function () {
+          if (!queue.length) {
+            appendConsole('\n[doctor] all installs finished — rescanning…\n', false, true);
+            runDoctor();
+            return;
+          }
+          var pkg = queue.shift();
+          appendConsole('\n[pip] installing ' + pkg + ' …\n', false, true);
+          garm.env.install(pkg).then(next).catch(next);
+        };
+        next();
+      });
+    }
+    var reqs = box.querySelector('#btn-doctor-reqs');
+    if (reqs) {
+      reqs.addEventListener('click', function () {
+        garm.doctor.writeRequirements(doctorDeps).then(function (r) {
+          appendConsole('\n[doctor] wrote ' + r.path + ' (' + r.count + ' packages)\n', false, true);
+          refreshTree();
+        }).catch(function (err) { appendConsole('\n[doctor] ' + err.message + '\n', true); });
+      });
+    }
+  }
+
+  function runDoctor() {
+    renderDoctor(null); // scanning state
+    garm.doctor.scan().then(renderDoctor).catch(function (err) {
+      $('#doctor-body').innerHTML = '<div class="ds-error">' + escapeHtml(err.message) + '</div>';
+    });
+  }
+
+  function wireDoctor() {
+    $('#btn-env-doctor').addEventListener('click', function () { switchDock('env'); runDoctor(); });
+  }
+
+  // ---- System monitor (dock strip) ------------------------------------------
+  function fmtGb(bytes) { return (bytes / 1073741824).toFixed(1); }
+
+  function renderSysmon(s) {
+    var el = $('#sysmon');
+    if (!el || !s) return;
+    var bits = [];
+    if (s.cpuPct != null) bits.push('CPU ' + s.cpuPct + '%');
+    if (s.ram) bits.push('RAM ' + fmtGb(s.ram.usedBytes) + '/' + fmtGb(s.ram.totalBytes) + ' GB');
+    if (s.gpu) {
+      if (s.gpu.gpuPct != null) bits.push('GPU ' + s.gpu.gpuPct + '%');
+      if (s.gpu.vramTotalMB) bits.push('VRAM ' + (s.gpu.vramUsedMB / 1024).toFixed(1) + '/' + (s.gpu.vramTotalMB / 1024).toFixed(1) + ' GB');
+    }
+    el.textContent = bits.join(' · ');
+    el.classList.toggle('hot', (s.cpuPct || 0) >= 90 || !!(s.gpu && s.gpu.vramTotalMB && s.gpu.vramUsedMB / s.gpu.vramTotalMB >= 0.92));
+  }
+
+  function wireSysmon() {
+    garm.on('sysmon:update', renderSysmon);
   }
 
   // ---- Onboarding / welcome tour -----------------------------------------
@@ -1700,6 +2374,150 @@
     setTimeout(wireOnboarding._open, 220);
   }
 
+  // ---- Command palette + global hotkeys ------------------------------------
+  // Ctrl/Cmd+Shift+P opens a fuzzy-searchable list of every IDE action, so nothing
+  // requires hunting through toolbars. Ctrl/Cmd+S saves quietly with a toast.
+  var paletteOpen = false;
+  var paletteSel = 0;
+  var paletteMatches = [];
+
+  function saveActiveFile() {
+    garm.code.save(window.GARMEditor.getValue(), activeFile).then(function () {
+      loadedFile = activeFile;
+      toast('Saved ' + activeFile, 'ok', 1600);
+    }).catch(function (err) { toast('Save failed: ' + err.message, 'err'); });
+  }
+
+  function paletteCommands() {
+    var cmds = [
+      { name: 'Agent: Run Pipeline', hint: 'Ctrl+↵', run: runPipeline },
+      { name: 'Agent: Cancel Pipeline', run: function () { garm.pipeline.cancel(); } },
+      { name: 'Agent: Edit Selection', hint: 'Ctrl+K', run: function () { openInpaint(); } },
+      { name: 'File: Save', hint: 'Ctrl+S', run: saveActiveFile },
+      { name: 'File: Run', run: function () { $('#btn-run').click(); } },
+      { name: 'File: Stop Running Program', run: function () { garm.run.stop(); } },
+      { name: 'File: Compile (Syntax Check)', run: function () { $('#btn-compile').click(); } },
+      { name: 'File: New File', run: function () { openNew('file'); } },
+      { name: 'File: New Folder', run: function () { openNew('dir'); } },
+      { name: 'File: Refresh Explorer', run: refreshTree },
+      { name: 'GitHub: Publish Project…', run: function () { switchDock('github'); loadGitHubStatus(); } },
+      { name: 'GitHub: Commit & Push…', run: function () { switchDock('github'); loadGitHubStatus(); } },
+      { name: 'GitHub: Generate Repo Files (README, .gitignore, LICENSE, requirements.txt)', run: ghGenerateFiles },
+      { name: 'Output Mode: Single File', run: function () { setOutputMode('single', true); toast('New programs will be a single main.py', 'info'); } },
+      { name: 'Output Mode: Multi-file Repo', run: function () { setOutputMode('repo', true); toast('New programs will be multi-file projects', 'info'); } },
+      { name: 'Settings', run: openSettings },
+      { name: 'Welcome Tour', run: function () { $('#btn-welcome').click(); } },
+      { name: 'Open Project Folder', run: function () { garm.shell.showWorkspace(); } },
+    ];
+    ['console', 'render', 'data', 'terminal', 'memory', 'env', 'github', 'problems', 'chat'].forEach(function (tab) {
+      cmds.push({ name: 'View: ' + tab.charAt(0).toUpperCase() + tab.slice(1) + ' Tab', run: function () { switchDock(tab); } });
+    });
+    return cmds;
+  }
+
+  // Subsequence fuzzy match; lower score = better (earlier, tighter matches win).
+  function fuzzyScore(query, text) {
+    var q = query.toLowerCase(), t = text.toLowerCase();
+    if (!q) return 0;
+    var qi = 0, score = 0, last = -1;
+    for (var ti = 0; ti < t.length && qi < q.length; ti++) {
+      if (t[ti] === q[qi]) {
+        score += (last >= 0 ? (ti - last - 1) : ti);
+        last = ti; qi++;
+      }
+    }
+    return qi === q.length ? score : -1;
+  }
+
+  function openPalette() {
+    paletteOpen = true;
+    $('#palette-overlay').classList.remove('hidden');
+    var input = $('#palette-input');
+    input.value = '';
+    renderPalette('');
+    setTimeout(function () { input.focus(); }, 0);
+  }
+  function closePalette() {
+    paletteOpen = false;
+    $('#palette-overlay').classList.add('hidden');
+  }
+
+  function renderPalette(query) {
+    var all = paletteCommands();
+    paletteMatches = all
+      .map(function (c) { return { cmd: c, score: fuzzyScore(query, c.name) }; })
+      .filter(function (m) { return m.score >= 0; })
+      .sort(function (a, b) { return a.score - b.score; })
+      .slice(0, 12);
+    paletteSel = 0;
+    var list = $('#palette-list');
+    list.innerHTML = '';
+    paletteMatches.forEach(function (m, i) {
+      var row = document.createElement('div');
+      row.className = 'palette-item' + (i === paletteSel ? ' sel' : '');
+      row.innerHTML = '<span>' + escapeHtml(m.cmd.name) + '</span>' + (m.cmd.hint ? '<kbd>' + escapeHtml(m.cmd.hint) + '</kbd>' : '');
+      row.addEventListener('click', function () { runPaletteItem(i); });
+      row.addEventListener('mousemove', function () { setPaletteSel(i); });
+      list.appendChild(row);
+    });
+    if (!paletteMatches.length) list.innerHTML = '<div class="palette-empty">No matching command</div>';
+  }
+
+  function setPaletteSel(i) {
+    paletteSel = i;
+    document.querySelectorAll('.palette-item').forEach(function (el, j) { el.classList.toggle('sel', j === i); });
+  }
+
+  function runPaletteItem(i) {
+    var m = paletteMatches[i];
+    closePalette();
+    if (m) setTimeout(function () { m.cmd.run(); }, 0);
+  }
+
+  function wirePalette() {
+    var input = $('#palette-input');
+    input.addEventListener('input', function () { renderPalette(input.value.trim()); });
+    input.addEventListener('keydown', function (e) {
+      if (e.key === 'ArrowDown') { e.preventDefault(); setPaletteSel(Math.min(paletteSel + 1, paletteMatches.length - 1)); }
+      else if (e.key === 'ArrowUp') { e.preventDefault(); setPaletteSel(Math.max(paletteSel - 1, 0)); }
+      else if (e.key === 'Enter') { e.preventDefault(); runPaletteItem(paletteSel); }
+      else if (e.key === 'Escape') { e.preventDefault(); closePalette(); }
+    });
+    $('#palette-overlay').addEventListener('mousedown', function (e) {
+      if (e.target === e.currentTarget) closePalette();
+    });
+  }
+
+  function wireHotkeys() {
+    window.addEventListener('keydown', function (e) {
+      var mod = e.metaKey || e.ctrlKey;
+      if (mod && e.shiftKey && (e.key === 'P' || e.key === 'p')) {
+        e.preventDefault(); e.stopPropagation();
+        if (paletteOpen) closePalette(); else openPalette();
+      } else if (mod && !e.shiftKey && (e.key === 's' || e.key === 'S')) {
+        e.preventDefault();
+        saveActiveFile();
+      }
+    }, true); // capture: fire even when Monaco has focus
+  }
+
+  // The UI ships with macOS key glyphs; swap them for Ctrl+ labels elsewhere.
+  function fixPlatformKeys() {
+    if (/Mac/i.test(navigator.platform)) return;
+    var swap = function (s) {
+      return s.replace(/⌘\s?↵/g, 'Ctrl+Enter').replace(/⌘K/g, 'Ctrl+K').replace(/⌘L/g, 'Ctrl+L').replace(/⌘/g, 'Ctrl+');
+    };
+    document.querySelectorAll('[title]').forEach(function (el) {
+      if (el.title.indexOf('⌘') >= 0) el.title = swap(el.title);
+    });
+    document.querySelectorAll('kbd').forEach(function (el) {
+      if (el.textContent.indexOf('⌘') >= 0) el.textContent = swap(el.textContent);
+    });
+    document.querySelectorAll('.chat-empty-sub, .onboard-p').forEach(function (el) {
+      if (el.innerHTML.indexOf('⌘') >= 0) el.innerHTML = swap(el.innerHTML);
+    });
+  }
+
   // ---- Loading splash ----------------------------------------------------
   // The overlay + spin animation are pure CSS (they start the moment the page
   // paints). Here we just fade it out once the workbench is ready — but never
@@ -1747,6 +2565,7 @@
     wireSplitters();
     wireOutputMode();
     wireMisc();
+    wireWindowControls();
     window.GARMEditor.init();
     wireInpaint();
     wireContextMenu();
@@ -1754,7 +2573,15 @@
     wireMemory();
     wireEnv();
     wireData();
+    wireRuns();
+    wireHistory();
+    wireDoctor();
+    wireSysmon();
     wireChat();
+    wireGitHub();
+    wirePalette();
+    wireHotkeys();
+    fixPlatformKeys();
     wireOnboarding();
     window.GARMTerm.init();
     applyStatus('starting');

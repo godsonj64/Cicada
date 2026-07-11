@@ -15,6 +15,12 @@ const EVENT_CHANNELS = new Set([
   'pipeline:missingModule',
   'chat:delta', 'chat:done', 'chat:error',
   'datasets:update', 'datasets:progress',
+  'github:progress',
+  'window:state',
+  'llama:install',
+  'experiments:update',
+  'snapshots:update',
+  'sysmon:update',
 ]);
 
 contextBridge.exposeInMainWorld('garm', {
@@ -25,6 +31,8 @@ contextBridge.exposeInMainWorld('garm', {
   llama: {
     info: () => ipcRenderer.invoke('llama:info'),
     restart: (partial) => ipcRenderer.invoke('llama:restart', partial),
+    // Full local recovery: find/download the binary and model, then start the server.
+    recover: () => ipcRenderer.invoke('llama:recover'),
   },
   pipeline: {
     run: (request) => ipcRenderer.invoke('pipeline:run', request),
@@ -80,6 +88,35 @@ contextBridge.exposeInMainWorld('garm', {
     import: () => ipcRenderer.invoke('datasets:import'),             // open the native file picker
     remove: (id) => ipcRenderer.invoke('datasets:remove', { id }),
     reanalyze: (id) => ipcRenderer.invoke('datasets:reanalyze', { id }),
+    insights: (id) => ipcRenderer.invoke('datasets:insights', { id }),
+  },
+  // Experiment tracker: metric-parsed run history (Runs tab).
+  experiments: {
+    list: () => ipcRenderer.invoke('experiments:list'),
+    remove: (id) => ipcRenderer.invoke('experiments:remove', { id }),
+    clear: () => ipcRenderer.invoke('experiments:clear'),
+    exportCsv: () => ipcRenderer.invoke('experiments:exportCsv'),
+  },
+  // Dependency doctor: imports -> missing packages -> requirements.txt (Env tab).
+  doctor: {
+    scan: () => ipcRenderer.invoke('doctor:scan'),
+    writeRequirements: (deps) => ipcRenderer.invoke('doctor:writeRequirements', { deps }),
+  },
+  // Project snapshots: checkpoint + restore (History tab).
+  snapshots: {
+    list: () => ipcRenderer.invoke('snapshots:list'),
+    create: (label) => ipcRenderer.invoke('snapshots:create', { label }),
+    restore: (id) => ipcRenderer.invoke('snapshots:restore', { id }),
+    remove: (id) => ipcRenderer.invoke('snapshots:remove', { id }),
+  },
+  // GitHub integration: repo status, one-click publish, and subsequent pushes.
+  github: {
+    status: () => ipcRenderer.invoke('github:status'),
+    verifyToken: (token) => ipcRenderer.invoke('github:verifyToken', { token }),
+    generateFiles: (opts) => ipcRenderer.invoke('github:generateFiles', opts),
+    commit: (message) => ipcRenderer.invoke('github:commit', { message }),
+    publish: (opts) => ipcRenderer.invoke('github:publish', opts),
+    push: (message) => ipcRenderer.invoke('github:push', { message }),
   },
   run: {
     input: (text) => ipcRenderer.invoke('run:input', { text }),
@@ -94,6 +131,7 @@ contextBridge.exposeInMainWorld('garm', {
   dialog: {
     pickModel: () => ipcRenderer.invoke('dialog:pickModel'),
     pickPython: () => ipcRenderer.invoke('dialog:pickPython'),
+    pickLlamaServer: () => ipcRenderer.invoke('dialog:pickLlamaServer'),
   },
   shell: {
     openPath: (p) => ipcRenderer.invoke('shell:openPath', { path: p }),
@@ -103,6 +141,14 @@ contextBridge.exposeInMainWorld('garm', {
   clipboard: {
     readText: () => ipcRenderer.invoke('clipboard:read'),
     writeText: (text) => ipcRenderer.invoke('clipboard:write', { text }),
+  },
+  // Custom title-bar controls for the frameless window (Windows/Linux).
+  window: {
+    minimize: () => ipcRenderer.invoke('window:minimize'),
+    maximize: () => ipcRenderer.invoke('window:maximize'),
+    close: () => ipcRenderer.invoke('window:close'),
+    isMaximized: () => ipcRenderer.invoke('window:isMaximized'),
+    platform: () => ipcRenderer.invoke('window:platform'),
   },
   // Generic, allowlisted event subscription. Returns an unsubscribe function.
   on: (channel, handler) => {

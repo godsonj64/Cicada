@@ -89,6 +89,65 @@ async function streamChat(baseUrl, { messages, temperature, topP, maxTokens, sig
   return full;
 }
 
+// ---- Resilience ----------------------------------------------------------------
+//
+// A local llama-server can drop a request transiently (it is restarting after a crash,
+// the OS was paging, the port briefly refused) and hosted providers throw 5xx/overloaded.
+// None of those should kill a multi-minute pipeline run outright — they are retried a
+// couple of times, waiting for the server's /health to come back in between.
+
+// True for errors worth retrying: connection-level failures and server-side (5xx /
+// overload) statuses. 4xx (bad key, bad request) and aborts are NOT transient.
+function isTransientLlmError(err) {
+  if (!err || err.name === 'AbortError') return false;
+  const msg = String(err.message || '');
+  if (/fetch failed|ECONNREFUSED|ECONNRESET|EPIPE|ETIMEDOUT|socket hang up|network|terminated|aborted prematurely/i.test(msg)) return true;
+  const m = msg.match(/LLM request failed \((\d{3})\)/);
+  if (m) { const code = Number(m[1]); return code >= 500 || code === 429; }
+  return false;
+}
+
+// Poll `baseUrl`/health until it answers OK, the signal aborts, or `timeoutMs` elapses.
+// Resolves true when healthy. Used between retries so a llama-server that is reloading
+// the model (10–60 s) gets a real chance instead of three instant failures.
+async function waitForServer(baseUrl, signal, timeoutMs) {
+  const deadline = Date.now() + (timeoutMs || 45000);
+  while (Date.now() < deadline) {
+    if (signal && signal.aborted) return false;
+    try {
+      const res = await fetch(`${baseUrl}/health`, { method: 'GET', signal });
+      if (res.ok) return true;
+    } catch (_) { /* still down */ }
+    await new Promise((r) => setTimeout(r, 1500));
+  }
+  return false;
+}
+
+/**
+ * streamChat with automatic retries on transient failures. Everything in `opts` is
+ * passed through; additionally:
+ *   retries  — max retry attempts after the first try (default 2)
+ *   onRetry(attempt, err) — called before each retry so the caller can reset its
+ *                           streaming accumulators (deltas restart from scratch).
+ * Hosted providers (apiKey set) skip the health poll and just back off briefly.
+ */
+async function streamChatResilient(baseUrl, opts) {
+  const { retries = 2, onRetry, ...rest } = opts;
+  for (let attempt = 0; ; attempt++) {
+    try {
+      // Via module.exports so tests can stub streamChat (see scripts/stop_test.js).
+      return await module.exports.streamChat(baseUrl, rest);
+    } catch (err) {
+      if (attempt >= retries || !isTransientLlmError(err)) throw err;
+      if (rest.signal && rest.signal.aborted) throw err;
+      if (onRetry) { try { onRetry(attempt + 1, err); } catch (_) { /* ignore */ } }
+      if (rest.apiKey) await new Promise((r) => setTimeout(r, 2000 * (attempt + 1)));
+      else await waitForServer(baseUrl, rest.signal, 45000);
+      if (rest.signal && rest.signal.aborted) throw err;
+    }
+  }
+}
+
 /**
  * Split a model response into { thinking, answer }.
  * Handles both well-formed <think>...</think> and an unclosed leading <think>.
@@ -329,6 +388,7 @@ function extractFilesStreaming(text) {
 }
 
 module.exports = {
-  streamChat, splitThinking, extractCode, extractCodeStreaming, answerStream, isMeaningfulCode,
+  streamChat, streamChatResilient, isTransientLlmError, waitForServer,
+  splitThinking, extractCode, extractCodeStreaming, answerStream, isMeaningfulCode,
   extractFiles, extractFilesStreaming, pickEntry, looksLikePath,
 };

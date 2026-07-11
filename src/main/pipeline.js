@@ -3,7 +3,7 @@
 const path = require('path');
 const fs = require('fs');
 const {
-  streamChat, splitThinking, extractCode, extractCodeStreaming, answerStream,
+  streamChatResilient, splitThinking, extractCode, extractCodeStreaming, answerStream,
   extractFiles, extractFilesStreaming, pickEntry,
 } = require('./llm');
 const python = require('./python');
@@ -306,7 +306,7 @@ class Pipeline {
   // written authoritatively once parsed. Returns the raw model text.
   async _complete(userPrompt) {
     const messages = [{ role: 'system', content: SYS }, { role: 'user', content: userPrompt }];
-    return streamChat(this.baseUrl, {
+    return streamChatResilient(this.baseUrl, {
       messages,
       temperature: this.config.temperature,
       topP: this.config.topP,
@@ -314,6 +314,36 @@ class Pipeline {
       maxTokens: this._codeBudget(messages),
       signal: this.abort.signal,
     });
+  }
+
+  // Note streamed into a stage's answer panel when a transient LLM failure is retried,
+  // so the user sees the recovery instead of a silent stall.
+  _retryNote(id, attempt, err) {
+    this.emit('stage:delta', {
+      id, kind: 'answer',
+      text: `\n⟳ Connection to the model dropped (${(err && err.message) || 'transient error'}) — retrying (attempt ${attempt})…\n`,
+    });
+  }
+
+  // Run a code-producing stage and, if the model returned NO usable code (the most common
+  // small-model failure: prose instead of a fenced block, or reasoning that never ends),
+  // automatically re-ask ONCE with a firmer instruction before giving up. Truncation
+  // (finishReason 'length') is not re-asked — a longer answer needs a bigger budget, not a
+  // sterner prompt. `extract(res)` maps the stage result to code / a file list; a falsy or
+  // empty-array result counts as "no code". Returns { res, out }.
+  async _stageWithReask(id, name, prompt, opts, extract) {
+    let res = await this._stage(id, name, prompt, opts);
+    let out = extract(res);
+    const empty = (v) => !v || (Array.isArray(v) && !v.length);
+    if (empty(out) && res.finishReason !== 'length' && !this._aborted()) {
+      this.emit('stage:delta', { id, kind: 'answer', text: '\n⟳ No usable code block came back — asking the model once more…\n' });
+      res = await this._stage(id, name, prompt +
+        '\n\nIMPORTANT: Your previous reply contained NO usable fenced code block. Respond again, and this ' +
+        'time output the code inside ONE complete ```python fenced block — open the fence, write the full ' +
+        'code, and CLOSE the fence. No prose.', opts);
+      out = extract(res);
+    }
+    return { res, out };
   }
 
   // Count lines that hold real code (not blank, not comment-only).
@@ -394,7 +424,7 @@ class Pipeline {
 
     let text;
     try {
-      text = await streamChat(this.baseUrl, {
+      text = await streamChatResilient(this.baseUrl, {
         messages,
         temperature: this.config.temperature,
         topP: this.config.topP,
@@ -403,6 +433,9 @@ class Pipeline {
         signal: this.abort.signal,
         onMeta: (m) => { finishReason = m.finishReason; },
         onDelta: (chunk) => { full += chunk; onDelta(); },
+        // A retry restarts the stream from scratch — reset the accumulators so the
+        // second attempt's deltas don't misalign against the first attempt's text.
+        onRetry: (attempt, err) => { full = ''; tLen = 0; aLen = 0; lastCode = ''; this._retryNote(id, attempt, err); },
       });
     } catch (err) {
       if (live) this.emit('pipeline:code-stream-end', {});
@@ -425,13 +458,14 @@ class Pipeline {
     let lastAt = 0;
     this.emit('pipeline:code-stream-start', {});
     try {
-      const text = await streamChat(this.baseUrl, {
+      const text = await streamChatResilient(this.baseUrl, {
         messages,
         temperature: this.config.temperature,
         topP: this.config.topP,
         model: this.model, apiKey: this.apiKey,
         maxTokens: this._codeBudget(messages),
         signal: this.abort.signal,
+        onRetry: () => { full = ''; lastCode = ''; },
         onDelta: (chunk) => {
           full += chunk;
           const partial = extractCodeStreaming(answerStream(full));
@@ -683,16 +717,17 @@ class Pipeline {
 
       if (repo) { await this._generateRepo(request, designRes.answer); return; }
 
-      const genRes = await this._stage(
+      const gen = await this._stageWithReask(
         'generate', 'Generate Code',
         `Implement the program. Output EXACTLY ONE \`\`\`python code block containing a complete, runnable, self-contained program. No prose outside the code block. ${this._libNote()} Include an \`if __name__ == "__main__":\` entry point. Avoid input() unless the request truly requires interactive input.\n\nREQUEST:\n${request}\n\nDESIGN:\n${designRes.answer}\n\n${BRIEF_THINK}`,
-        { liveCode: true }
+        { liveCode: true },
+        (r) => extractCode(r.answer) || extractCode(r.full)
       );
-      const code = extractCode(genRes.answer) || extractCode(genRes.full);
+      const code = gen.out;
       if (!code) {
-        throw new Error(genRes.finishReason === 'length'
+        throw new Error(gen.res.finishReason === 'length'
           ? 'Generate stage was cut off before completing the code block (token budget exhausted). Raise Context size in Settings or narrow the request.'
-          : 'Model did not return a usable code block in the Generate stage.');
+          : 'The model did not return usable code after two attempts. Re-run the request, rephrase it more concretely, or switch to a stronger model in Settings.');
       }
       this._writeCode(code);
 
@@ -706,16 +741,17 @@ class Pipeline {
   // Repo-mode Generate: ask for the whole project as path-labelled files, parse them,
   // write them to disk, then verify (review/compile/run) the project as a unit.
   async _generateRepo(request, design) {
-    const genRes = await this._stage(
+    const gen = await this._stageWithReask(
       'generate', 'Generate Code',
       `Implement the program now. ${REPO_FORMAT} ${this._libNote()} Avoid input() unless the request truly requires interactive input.\n\nREQUEST:\n${request}\n\nDESIGN:\n${design}\n\n${BRIEF_THINK}`,
-      { liveFiles: true }
+      { liveFiles: true },
+      (r) => extractFiles(r.answer.length ? r.answer : r.full)
     );
-    const files = extractFiles(genRes.answer.length ? genRes.answer : genRes.full);
+    const files = gen.out;
     if (!files.length) {
-      throw new Error(genRes.finishReason === 'length'
+      throw new Error(gen.res.finishReason === 'length'
         ? 'Generate stage was cut off before completing the project (token budget exhausted). Raise Context size in Settings or narrow the request.'
-        : 'Model did not return any usable file blocks in the Generate stage.');
+        : 'The model did not return any usable file blocks after two attempts. Re-run, rephrase the request, or switch to a stronger model in Settings.');
     }
     this._writeFiles(files, pickEntry(files));
     this._remember('create', `Built ${files.length}-file project for: ${request} (entry: ${this.entry})`, request);
@@ -738,16 +774,17 @@ class Pipeline {
         { maxTokens: 1024 }
       );
 
-      const applyRes = await this._stage(
+      const apply = await this._stageWithReask(
         'apply', 'Apply Changes',
         `Apply the requested change to the program. Output EXACTLY ONE \`\`\`python code block with the COMPLETE updated program (not a diff or snippet). Preserve existing working behaviour unless the change requires altering it. ${this._libNote()}\n\nCURRENT CODE:\n\`\`\`python\n${base}\n\`\`\`\n\nREQUESTED CHANGE:\n${changeRequest}\n\nPLAN:\n${planRes.answer}\n\n${BRIEF_THINK}`,
-        { liveCode: true }
+        { liveCode: true },
+        (r) => extractCode(r.answer) || extractCode(r.full)
       );
-      const code = extractCode(applyRes.answer) || extractCode(applyRes.full);
+      const code = apply.out;
       if (!code) {
-        throw new Error(applyRes.finishReason === 'length'
+        throw new Error(apply.res.finishReason === 'length'
           ? 'Apply Changes was cut off before completing the program (token budget exhausted). Raise Context size in Settings or narrow the change.'
-          : 'Model did not return updated code in the Apply Changes stage.');
+          : 'The model did not return updated code after two attempts. Your code is unchanged — re-run or rephrase the change.');
       }
       // The model sometimes returns a fragment instead of the full updated program; don't
       // let that silently replace the user's working code (it is restored on this throw).
@@ -790,16 +827,17 @@ class Pipeline {
         { maxTokens: 1024 }
       );
 
-      const applyRes = await this._stage(
+      const apply = await this._stageWithReask(
         'apply', 'Apply Changes',
         `Apply the requested change to the project. Return the COMPLETE updated contents of every file you add or modify (whole files, not diffs), each labelled with its path. Preserve existing working behaviour unless the change requires altering it, and keep imports consistent across files. ${REPO_FORMAT} ${this._libNote()}\n\nCURRENT PROJECT (entry: ${this.entry}):\n${this._repoContext(this.files)}\n\nREQUESTED CHANGE:\n${changeRequest}\n\nPLAN:\n${planRes.answer}\n\n${BRIEF_THINK}`,
-        { liveFiles: true }
+        { liveFiles: true },
+        (r) => extractFiles(r.answer.length ? r.answer : r.full)
       );
-      const updates = extractFiles(applyRes.answer.length ? applyRes.answer : applyRes.full);
+      const updates = apply.out;
       if (!updates.length) {
-        throw new Error(applyRes.finishReason === 'length'
+        throw new Error(apply.res.finishReason === 'length'
           ? 'Apply Changes was cut off before completing the project (token budget exhausted). Raise Context size in Settings or narrow the change.'
-          : 'Model did not return updated files in the Apply Changes stage.');
+          : 'The model did not return updated files after two attempts. Your project is unchanged — re-run or rephrase the change.');
       }
       this._writeFiles(this._mergeFiles(this.files, updates), this.entry);
       this._remember('refine', `Change applied to project: ${changeRequest}`);
@@ -831,16 +869,26 @@ class Pipeline {
         `FULL FILE (for context only — do NOT reproduce it):\n\`\`\`python\n${original}\n\`\`\`\n\n` +
         `SELECTED REGION TO REWRITE (lines ${startLine}–${endLine}):\n\`\`\`python\n${regionSrc}\n\`\`\`${extra || ''}\n\n${BRIEF_THINK}`;
 
-      const regionRes = await this._stageRaw('region', 'Rewrite Selection', rewritePrompt(''), {
+      const stageOpts = {
         maxTokens: this.config.maxTokens,
         // Live-preview the splice as the replacement streams in.
         livePreview: (snippet) => spliceRegion(original, sel, snippet),
-      });
+      };
+      let regionRes = await this._stageRaw('region', 'Rewrite Selection', rewritePrompt(''), stageOpts);
       let snippet = extractCode(regionRes.answer) || extractCode(regionRes.full);
+      // Small models sometimes answer in prose with no fenced block — re-ask once,
+      // firmly, before failing the edit.
+      if (!snippet && regionRes.finishReason !== 'length' && !this._aborted()) {
+        this.emit('stage:delta', { id: 'region', kind: 'answer', text: '\n⟳ No usable code block came back — asking the model once more…\n' });
+        regionRes = await this._stageRaw('region', 'Rewrite Selection',
+          rewritePrompt('\n\nIMPORTANT: Your previous reply contained NO usable fenced code block. Respond again with ONLY the replacement code inside one complete ```python fenced block (open AND close the fence). No prose.'),
+          stageOpts);
+        snippet = extractCode(regionRes.answer) || extractCode(regionRes.full);
+      }
       if (!snippet) {
         throw new Error(regionRes.finishReason === 'length'
           ? 'Rewrite was cut off before completing the replacement (token budget exhausted). Raise Context size in Settings or select a smaller region.'
-          : 'Model did not return a replacement code block for the selection.');
+          : 'The model did not return a replacement code block after two attempts. Your code is unchanged — try again or rephrase the instruction.');
       }
 
       // --- Stage 2: splice + compile-gate with one heal pass, else roll back. ---
@@ -956,13 +1004,14 @@ class Pipeline {
     const budget = livePreview ? this._codeBudget(messages) : (maxTokens || this.config.maxTokens);
     let text;
     try {
-      text = await streamChat(this.baseUrl, {
+      text = await streamChatResilient(this.baseUrl, {
         messages,
         temperature: this.config.temperature, topP: this.config.topP,
         model: this.model, apiKey: this.apiKey,
         maxTokens: budget, signal: this.abort.signal,
         onMeta: (m) => { finishReason = m.finishReason; },
         onDelta: (chunk) => { full += chunk; onDelta(); },
+        onRetry: (attempt, err) => { full = ''; tLen = 0; aLen = 0; lastPreview = ''; this._retryNote(id, attempt, err); },
       });
     } catch (err) {
       if (livePreview) this.emit('pipeline:code-stream-end', {});
@@ -984,11 +1033,12 @@ class Pipeline {
     const messages = [{ role: 'system', content: SYS }, { role: 'user', content: userPrompt }];
     this.emit('pipeline:code-stream-start', {});
     try {
-      const text = await streamChat(this.baseUrl, {
+      const text = await streamChatResilient(this.baseUrl, {
         messages,
         temperature: this.config.temperature, topP: this.config.topP,
         model: this.model, apiKey: this.apiKey,
         maxTokens: this._codeBudget(messages), signal: this.abort.signal,
+        onRetry: () => { full = ''; lastPreview = ''; },
         onDelta: (chunk) => {
           full += chunk;
           const snippet = extractCodeStreaming(answerStream(full));
