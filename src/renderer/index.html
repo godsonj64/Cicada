@@ -448,6 +448,42 @@
     </div>
   </div>
 
+  <!-- First-run signup: shown once before the welcome tour. Skippable; the consent
+       line states exactly what is sent and where. -->
+  <div id="signup-overlay" class="overlay hidden">
+    <div class="modal signup-modal">
+      <div class="modal-head"><span>Welcome to Cicada</span></div>
+      <div class="modal-body">
+        <div class="signup-lede">Create your free profile so we can count real users and reach you about important updates. It takes five seconds.</div>
+        <label class="field">
+          <span>Name</span>
+          <input id="signup-name" type="text" placeholder="Ada Lovelace" autocomplete="name" spellcheck="false" maxlength="120" />
+        </label>
+        <label class="field">
+          <span>Email</span>
+          <input id="signup-email" type="email" placeholder="you@example.com" autocomplete="email" spellcheck="false" maxlength="200" />
+          <span id="signup-error" class="signup-error hidden">Enter a valid email address.</span>
+        </label>
+        <div class="signup-consent">By signing up you agree that your name, email, app version, and platform are sent once to the Cicada developer (stored in a private repository). Nothing else ever leaves your machine — code, prompts, and data stay local.</div>
+      </div>
+      <div class="modal-foot signup-foot">
+        <button id="signup-skip" class="btn btn-ghost btn-sm">Continue without signing up</button>
+        <button id="signup-submit" class="btn btn-accent">Sign up</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- One-time "enjoying Cicada?" star prompt, shown after a few launches. -->
+  <div id="star-popup" class="star-popup hidden" role="dialog" aria-label="Star Cicada on GitHub">
+    <div class="star-title">Enjoying Cicada? <span class="star-emoji">⭐</span></div>
+    <div class="star-sub">A star on GitHub helps more people find it — and tells us to keep building.</div>
+    <div class="star-actions">
+      <button id="star-go" class="btn btn-accent btn-sm">Star on GitHub</button>
+      <button id="star-later" class="btn btn-ghost btn-sm">Later</button>
+      <button id="star-never" class="btn btn-ghost btn-sm">Don't ask again</button>
+    </div>
+  </div>
+
   <!-- Toast notifications: transient, non-blocking feedback (save, publish, errors). -->
   <div id="toasts" class="toasts" aria-live="polite"></div>
 

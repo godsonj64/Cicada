@@ -2374,6 +2374,99 @@
     setTimeout(wireOnboarding._open, 220);
   }
 
+  // ---- First-run signup ----------------------------------------------------
+  // Shown once, before the welcome tour. Submitting stores the profile locally and
+  // (when telemetry is enabled in the build) delivers it once to the developer's
+  // private repo — exactly what the consent line on the form says. Fully skippable,
+  // and either path chains into the onboarding tour.
+  function wireSignup() {
+    var overlay = $('#signup-overlay');
+    if (!overlay) return;
+    var name = $('#signup-name');
+    var email = $('#signup-email');
+    var errEl = $('#signup-error');
+
+    function close() {
+      overlay.classList.add('hidden');
+      maybeShowOnboarding();
+    }
+    function submit() {
+      var e = email.value.trim();
+      // A signup needs a plausible email; names are optional.
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(e)) {
+        errEl.classList.remove('hidden');
+        email.focus();
+        return;
+      }
+      errEl.classList.add('hidden');
+      $('#signup-submit').disabled = true;
+      garm.profile.signup(name.value.trim(), e).then(function () {
+        toast('Welcome aboard' + (name.value.trim() ? ', ' + name.value.trim().split(/\s+/)[0] : '') + '! 🎉', 'ok');
+        close();
+      }).catch(function () { close(); });
+    }
+
+    $('#signup-submit').addEventListener('click', submit);
+    $('#signup-skip').addEventListener('click', function () {
+      garm.profile.skip().catch(function () {});
+      close();
+    });
+    [name, email].forEach(function (input) {
+      input.addEventListener('keydown', function (ev) { if (ev.key === 'Enter') { ev.preventDefault(); submit(); } });
+    });
+    email.addEventListener('input', function () { errEl.classList.add('hidden'); });
+
+    wireSignup._open = function () {
+      overlay.classList.remove('hidden');
+      setTimeout(function () { name.focus(); }, 60);
+    };
+  }
+
+  // Splash-clear entry point: signup first (once), then the tour.
+  function maybeShowSignup() {
+    garm.profile.get().then(function (p) {
+      if (!p || p.signupDone) { maybeShowOnboarding(); maybeShowStarPrompt(p); return; }
+      if (typeof wireSignup._open === 'function') wireSignup._open();
+      else maybeShowOnboarding();
+    }).catch(function () { maybeShowOnboarding(); });
+  }
+
+  // ---- "Star us on GitHub" prompt -------------------------------------------
+  // One-time, after a few launches, never on the signup/tour run, and dismissible
+  // forever. "Later" hides it for this launch only.
+  var STAR_URL = 'https://github.com/godsonj64/Cicada';
+  var STAR_MIN_LAUNCHES = 3;
+
+  function maybeShowStarPrompt(p) {
+    if (!p || p.starPromptDone || (p.launchCount || 0) < STAR_MIN_LAUNCHES) return;
+    var pop = $('#star-popup');
+    if (!pop) return;
+    // Let the user settle in before asking anything of them.
+    setTimeout(function () {
+      pop.classList.remove('hidden');
+      requestAnimationFrame(function () { pop.classList.add('show'); });
+    }, 20000);
+  }
+
+  function wireStarPrompt() {
+    var pop = $('#star-popup');
+    if (!pop) return;
+    function hide() {
+      pop.classList.remove('show');
+      setTimeout(function () { pop.classList.add('hidden'); }, 250);
+    }
+    $('#star-go').addEventListener('click', function () {
+      garm.shell.openExternal(STAR_URL);
+      garm.star.dismiss().catch(function () {});
+      hide();
+    });
+    $('#star-later').addEventListener('click', hide);
+    $('#star-never').addEventListener('click', function () {
+      garm.star.dismiss().catch(function () {});
+      hide();
+    });
+  }
+
   // ---- Command palette + global hotkeys ------------------------------------
   // Ctrl/Cmd+Shift+P opens a fuzzy-searchable list of every IDE action, so nothing
   // requires hunting through toolbars. Ctrl/Cmd+S saves quietly with a toast.
@@ -2583,9 +2676,11 @@
     wireHotkeys();
     fixPlatformKeys();
     wireOnboarding();
+    wireSignup();
+    wireStarPrompt();
     window.GARMTerm.init();
     applyStatus('starting');
-    afterSplash = maybeShowOnboarding; // first-run tour, once the splash clears
+    afterSplash = maybeShowSignup; // first-run signup → tour; later runs → star prompt
     dismissSplash();
   }
 

@@ -74,6 +74,19 @@ const DEFAULTS = {
   // GitHub integration: a personal access token (classic or fine-grained with `repo`
   // scope) used to create repositories and push. Stored locally in config.json only.
   githubToken: '',
+  // First-run signup. `profile` is { name, email, createdAt } once submitted; it is
+  // stored locally and delivered ONCE to the developer's private telemetry repo when
+  // telemetry is enabled (see src/main/telemetry.js). `signupDone` is also set by
+  // "continue without signing up" so the form never nags. `signupSyncedAt` records
+  // successful delivery (empty = still queued; retried on later launches).
+  profile: null,
+  signupDone: false,
+  signupSyncedAt: '',
+  // Optional token override for signup delivery (normally embedded at release time).
+  telemetryToken: '',
+  // App-launch counter + one-time "enjoying Cicada? star it" prompt bookkeeping.
+  launchCount: 0,
+  starPromptDone: false,
 };
 
 function configPath() {

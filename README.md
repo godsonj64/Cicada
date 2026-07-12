@@ -62,7 +62,7 @@ bar).
 
 ## Highlights
 
-- 🔒 **100% local & offline** — inference runs through `llama-server` on `127.0.0.1`; nothing is uploaded.
+- 🔒 **100% local & offline** — inference runs through `llama-server` on `127.0.0.1`; your code, prompts, and data are never uploaded. (The only exception: the optional first-run signup — see [Signup & telemetry](#signup--telemetry).)
 - 🚀 **Zero-setup first run** — if no `llama-server` is found, Cicada auto-downloads a prebuilt llama.cpp release for your platform, unzips it, and configures itself.
 - 🪟 **Native-feeling window** — a themed, frameless title bar with its own minimize/maximize/close controls (matching the app body) on Windows and Linux; macOS keeps its traffic lights.
 - 🧠 **Agentic, not one-shot** — a six-stage pipeline reviews, compiles, and runs the code it writes.
@@ -270,6 +270,29 @@ src/main/        Electron main process
 src/renderer/    UI (HTML/CSS + Monaco + xterm)
 scripts/         syntax check + headless / refine / inpaint / memory tests
 ```
+
+## Signup & telemetry
+
+On first launch Cicada shows a **signup form** (name + email). It is optional —
+"Continue without signing up" works forever and is never asked again.
+
+- **What is sent, and only if you sign up:** your name, email, app version, and
+  platform — delivered once as an issue in the developer's **private** telemetry
+  repository. The form says exactly this before you submit.
+- **What is never sent:** your code, prompts, project files, data files, chat,
+  or any usage analytics. Inference stays 100% local.
+- If you are offline at signup, delivery is retried on later launches; the
+  profile always lives locally in `~/GARM Code/config.json`.
+- After a few launches, a small one-time popup asks if you'd like to **star the
+  repo on GitHub** — "Don't ask again" is honoured permanently.
+
+**For maintainers — enabling delivery in a release build:** signups are sent with a
+GitHub token resolved from `config.telemetryToken` → the `GARM_TELEMETRY_TOKEN`
+environment variable → the `EMBEDDED_TELEMETRY_TOKEN` constant in
+`src/main/telemetry.js`. Use a **fine-grained PAT** scoped to *only* the private
+telemetry repo with *only* "Issues: write" permission (an embedded token can always
+be extracted from a shipped app, so its blast radius must be that single issue
+inbox). With no token configured, telemetry is disabled and signups stay local.
 
 ## Notes
 

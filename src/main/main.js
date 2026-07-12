@@ -21,6 +21,7 @@ const doctor = require('./doctor');
 const snapshots = require('./snapshots');
 const sysmon = require('./sysmon');
 const insights = require('./insights');
+const telemetry = require('./telemetry');
 
 // On-demand dataset insights are cached in memory per (workspace, dataset id) — cheap to
 // recompute, so no persistence; cleared on project switch and dataset re-analysis.
@@ -357,6 +358,22 @@ async function ensureLlamaBinary() {
   } finally {
     installingLlama = false;
   }
+}
+
+// Deliver a submitted-but-unsent signup to the telemetry repo. Fire-and-forget:
+// offline or disabled just leaves signupSyncedAt empty, and every launch retries
+// until it lands. Never blocks startup and never surfaces an error to the user.
+async function syncSignup() {
+  if (!config.profile || config.signupSyncedAt || !telemetry.enabled(config)) return;
+  try {
+    const r = await telemetry.sendSignup(config, config.profile, {
+      version: app.getVersion(),
+      platform: process.platform,
+      arch: process.arch,
+      at: new Date().toISOString(),
+    });
+    if (r.ok) config = configMod.save({ signupSyncedAt: new Date().toISOString() });
+  } catch (_) { /* offline — retried next launch */ }
 }
 
 let downloadingModel = false;
@@ -950,6 +967,27 @@ function registerIpc() {
   ipcMain.handle('window:isMaximized', () => !!(mainWindow && mainWindow.isMaximized()));
   ipcMain.handle('window:platform', () => process.platform);
 
+  // ----- First-run signup + star prompt -----
+  ipcMain.handle('profile:get', () => ({
+    profile: config.profile,
+    signupDone: !!config.signupDone,
+    launchCount: config.launchCount || 0,
+    starPromptDone: !!config.starPromptDone,
+    telemetryEnabled: telemetry.enabled(config),
+  }));
+  ipcMain.handle('profile:signup', (_e, { name, email }) => {
+    const profile = {
+      name: String(name || '').trim().slice(0, 120),
+      email: String(email || '').trim().slice(0, 200),
+      createdAt: new Date().toISOString(),
+    };
+    config = configMod.save({ profile, signupDone: true, signupSyncedAt: '' });
+    syncSignup(); // async; retried on later launches while offline
+    return { ok: true, telemetryEnabled: telemetry.enabled(config) };
+  });
+  ipcMain.handle('profile:skip', () => { config = configMod.save({ signupDone: true }); return true; });
+  ipcMain.handle('star:dismiss', () => { config = configMod.save({ starPromptDone: true }); return true; });
+
   ipcMain.handle('shell:openPath', (_e, { path: p }) => shell.openPath(p));
   ipcMain.handle('shell:showWorkspace', () => shell.openPath(config.workspaceDir));
   // Open an external URL (https only) in the user's default browser — used for the
@@ -973,6 +1011,10 @@ app.whenReady().then(() => {
   if (active !== config.workspaceDir) config = configMod.save({ workspaceDir: active });
   fs.mkdirSync(config.workspaceDir, { recursive: true });
   memory = new ContextMemory(config.workspaceDir);
+  // Launch bookkeeping (drives the one-time star prompt) + deliver any signup that
+  // was submitted offline on a previous run.
+  config = configMod.save({ launchCount: (config.launchCount || 0) + 1 });
+  syncSignup();
   registerIpc();
   createWindow();
   setupLlama();

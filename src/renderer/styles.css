@@ -1422,6 +1422,31 @@ body.app-enter #stages .stage {
 .gh-step-detail { color: var(--text-3); font-size: 11.5px; line-height: 1.45; white-space: pre-wrap; word-break: break-word; }
 .gh-step-error .gh-step-detail { color: var(--danger); }
 
+/* ===== First-run signup ================================================== */
+.signup-modal { max-width: 440px; }
+.signup-lede { font-size: 13px; color: var(--text-2); line-height: 1.55; margin-bottom: 14px; }
+.signup-error { display: block; font-size: 11.5px; color: var(--danger); margin-top: 5px; }
+.signup-consent {
+  font-size: 11px; color: var(--text-3); line-height: 1.55; margin-top: 12px;
+  padding: 9px 11px; background: var(--bg-input); border: 1px solid var(--line); border-radius: 8px;
+}
+.signup-foot { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+
+/* ===== Star prompt ======================================================== */
+.star-popup {
+  position: fixed; right: 18px; bottom: 64px; z-index: 290; max-width: 340px;
+  background: var(--bg-2); border: 1px solid var(--line-2); border-radius: 12px;
+  padding: 14px 16px; box-shadow: 0 12px 40px rgba(0, 0, 0, 0.55);
+  opacity: 0; transform: translateY(10px);
+  transition: opacity .25s ease, transform .25s ease;
+}
+.star-popup.show { opacity: 1; transform: translateY(0); }
+.star-title { font-size: 13.5px; font-weight: 640; color: var(--text); }
+.star-emoji { margin-left: 2px; }
+.star-sub { font-size: 12px; color: var(--text-2); line-height: 1.5; margin: 6px 0 12px; }
+.star-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+@media (prefers-reduced-motion: reduce) { .star-popup { transition: none; } }
+
 /* ===== Toast notifications =============================================== */
 .toasts {
   position: fixed; right: 18px; bottom: 18px; z-index: 300;

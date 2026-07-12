@@ -45,6 +45,15 @@ contextBridge.exposeInMainWorld('garm', {
     send: (messages) => ipcRenderer.invoke('chat:send', { messages }),
     cancel: () => ipcRenderer.invoke('chat:cancel'),
   },
+  // First-run signup + "star us" prompt bookkeeping.
+  profile: {
+    get: () => ipcRenderer.invoke('profile:get'),
+    signup: (name, email) => ipcRenderer.invoke('profile:signup', { name, email }),
+    skip: () => ipcRenderer.invoke('profile:skip'),
+  },
+  star: {
+    dismiss: () => ipcRenderer.invoke('star:dismiss'),
+  },
   memory: {
     get: () => ipcRenderer.invoke('memory:get'),
     addFact: (fact) => ipcRenderer.invoke('memory:addFact', { fact }),
