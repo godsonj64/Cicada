@@ -29,6 +29,8 @@ stage of reasoning runs on your machine through a local GGUF model
 [`llama-server`](https://github.com/ggerganov/llama.cpp) — **no API keys, no cloud, no data
 leaving your machine.**
 
+TRy Cicada for free https://cicada.ai.studio/
+
 Instead of a single prompt-to-code shot, Cicada runs your request through a **six-stage agentic
 pipeline** (evaluate → design → generate → review → fix → run) so the output is not just
 plausible-looking code but code that has been review-checked, compile-checked, and actually
