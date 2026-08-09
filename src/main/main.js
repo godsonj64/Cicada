@@ -22,6 +22,13 @@ const snapshots = require('./snapshots');
 const sysmon = require('./sysmon');
 const insights = require('./insights');
 const telemetry = require('./telemetry');
+const notebooks = require('./notebooks');
+const reproducibility = require('./reproducibility');
+const research = require('./research');
+
+// Allows isolated Chromium state for automated UI verification without changing
+// the normal user's Electron profile.
+if (process.env.GARM_USER_DATA) app.setPath('userData', path.resolve(process.env.GARM_USER_DATA));
 
 // On-demand dataset insights are cached in memory per (workspace, dataset id) — cheap to
 // recompute, so no persistence; cleared on project switch and dataset re-analysis.
@@ -86,6 +93,7 @@ function gatherProjectFiles(budget) {
     for (const e of entries) {
       if (used >= budget) return;
       if (e.name.startsWith('.') || e.name.startsWith('_garm_')) continue;
+      if (e.isSymbolicLink()) continue;
       const abs = path.join(dir, e.name);
       const r = rel ? rel + '/' + e.name : e.name;
       if (e.isDirectory()) { if (!SKIP_DIRS.has(e.name)) walk(abs, r); continue; }
@@ -174,8 +182,9 @@ function runFileStreaming(file, opts = {}) {
         }
         // Record the run in the experiment tracker. Strictly best-effort: a tracker
         // problem must never affect the run result the pipeline/editor sees.
+        let experiment = null;
         try {
-          experiments.record(config.workspaceDir, {
+          experiment = experiments.record(config.workspaceDir, {
             file: path.relative(config.workspaceDir, file) || path.basename(file),
             source: opts.source || 'run',
             startedAt,
@@ -188,6 +197,14 @@ function runFileStreaming(file, opts = {}) {
         } catch (err) {
           console.error('[experiments] record failed:', err.message);
         }
+        // Reproducibility capture is best-effort and intentionally asynchronous so
+        // recording package/dataset hashes never delays the user's run result.
+        reproducibility.capture({
+          workspaceDir: config.workspaceDir,
+          file: path.relative(config.workspaceDir, file) || path.basename(file),
+          config, env: envInfo, datasets: datasets.list(config.workspaceDir),
+          run: experiment || { source: opts.source || 'run', startedAt, durationMs: Date.now() - t0, exitCode: code, metrics: {} },
+        }).then(() => send('repro:update', reproducibility.list(config.workspaceDir))).catch((err) => console.error('[repro] capture failed:', err.message));
         activeRun = null;
         resolve({ code, images, stderr });
       },
@@ -779,6 +796,7 @@ function registerIpc() {
 
   // ----- Files (scoped to the active project) -----
   ipcMain.handle('files:tree', () => projects.tree(config.workspaceDir));
+  ipcMain.handle('files:search', (_e, { query, options }) => projects.search(config.workspaceDir, query, options));
   ipcMain.handle('files:read', (_e, { path: rel }) => {
     const abs = projects.resolveInProject(config.workspaceDir, rel);
     const st = fs.statSync(abs);
@@ -935,6 +953,47 @@ function registerIpc() {
     return res;
   });
 
+  // ----- Research workbench: notebooks, reproducibility, validation, evaluation -----
+  ipcMain.handle('notebooks:create', (_e, { path: rel, title }) => {
+    const target = /\.ipynb$/i.test(String(rel || '')) ? rel : String(rel || 'analysis') + '.ipynb';
+    const doc = notebooks.create(title || path.basename(target, '.ipynb'));
+    notebooks.save(config.workspaceDir, target, doc);
+    return { path: target, notebook: doc, tree: projects.tree(config.workspaceDir) };
+  });
+  ipcMain.handle('notebooks:load', (_e, { path: rel }) => {
+    const notebook = notebooks.load(config.workspaceDir, rel);
+    for (const cell of notebook.cells || []) for (const output of cell.outputs || []) {
+      if (output.cicada_path && fs.existsSync(output.cicada_path)) output.cicada_url = pathToFileURL(output.cicada_path).href;
+    }
+    return { path: rel, notebook };
+  });
+  ipcMain.handle('notebooks:save', (_e, { path: rel, notebook }) => ({ path: rel, notebook: notebooks.save(config.workspaceDir, rel, notebook) }));
+  ipcMain.handle('notebooks:run', async (_e, { path: rel, notebook }) => {
+    if (notebook) notebooks.save(config.workspaceDir, rel, notebook);
+    const startedAt = new Date().toISOString(); const t0 = Date.now();
+    const result = await notebooks.run(config.workspaceDir, rel, config.pythonPath);
+    for (const item of (result.cells || [])) for (const output of (item.outputs || [])) {
+      if (output.type === 'image' && output.path) output.url = pathToFileURL(output.path).href;
+    }
+    if (result.notebook) {
+      for (const cell of result.notebook.cells || []) for (const output of cell.outputs || []) {
+        if (output.cicada_path) output.cicada_url = pathToFileURL(output.cicada_path).href;
+      }
+    }
+    reproducibility.capture({ workspaceDir: config.workspaceDir, file: rel, config, env: envInfo, datasets: datasets.list(config.workspaceDir), run: { source: 'notebook', startedAt, durationMs: Date.now() - t0, exitCode: result.ok ? 0 : 1, metrics: {} } })
+      .then(() => send('repro:update', reproducibility.list(config.workspaceDir))).catch((err) => console.error('[repro] notebook capture failed:', err.message));
+    return result;
+  });
+  ipcMain.handle('repro:list', () => reproducibility.list(config.workspaceDir));
+  ipcMain.handle('repro:get', (_e, { id }) => reproducibility.get(config.workspaceDir, id));
+  ipcMain.handle('research:analyze', (_e, { datasetId, target }) => research.analyze(config.workspaceDir, datasetId, target, config.pythonPath));
+  ipcMain.handle('research:reports', () => research.listReports(config.workspaceDir));
+  ipcMain.handle('research:compareRuns', () => research.compareRuns(config.workspaceDir));
+  ipcMain.handle('research:generateTests', (_e, { report }) => {
+    const made = research.generateTests(config.workspaceDir, report);
+    return { ...made, tree: projects.tree(config.workspaceDir) };
+  });
+
   // ----- Project snapshots (History tab) -----
   ipcMain.handle('snapshots:list', () => snapshots.list(config.workspaceDir));
   ipcMain.handle('snapshots:create', (_e, { label }) => {
@@ -954,6 +1013,24 @@ function registerIpc() {
     const all = snapshots.list(config.workspaceDir);
     send('snapshots:update', all);
     return all;
+  });
+
+  // ----- Mission Control: one bounded snapshot of project + toolchain health -----
+  ipcMain.handle('dashboard:get', async () => {
+    const [git, deps] = await Promise.all([
+      Promise.resolve().then(() => github.status(config.workspaceDir)).catch((err) => ({ error: err.message })),
+      Promise.resolve().then(() => doctor.diagnose(config.workspaceDir, config.pythonPath)).catch((err) => ({ error: err.message })),
+    ]);
+    return {
+      project: { name: path.basename(config.workspaceDir), path: config.workspaceDir, stats: projects.stats(config.workspaceDir) },
+      model: { provider: config.provider, status: config.provider === 'deepseek' ? (config.deepseekApiKey ? 'ready' : 'error') : (llama ? llama.status : 'stopped'), detail: llama && llama.lastError },
+      python: envInfo || { error: 'Environment scan is still running.' },
+      git,
+      dependencies: deps,
+      runs: experiments.list(config.workspaceDir).slice(0, 5),
+      snapshots: snapshots.list(config.workspaceDir).slice(0, 5),
+      generatedAt: new Date().toISOString(),
+    };
   });
 
   // ----- Custom window controls (frameless on Windows/Linux) -----

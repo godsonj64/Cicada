@@ -109,9 +109,17 @@ function load() {
 
 function save(partial) {
   const merged = { ...load(), ...partial };
+  const file = configPath();
+  const dir = path.dirname(file);
+  const temp = file + '.tmp-' + process.pid;
   try {
-    fs.writeFileSync(configPath(), JSON.stringify(merged, null, 2), 'utf8');
+    fs.mkdirSync(dir, { recursive: true });
+    // Write-then-rename keeps the previous valid config intact if the process or
+    // machine dies halfway through persistence.
+    fs.writeFileSync(temp, JSON.stringify(merged, null, 2), 'utf8');
+    fs.renameSync(temp, file);
   } catch (err) {
+    try { if (fs.existsSync(temp)) fs.unlinkSync(temp); } catch (_) { /* ignore cleanup */ }
     console.error('[config] failed to write config.json:', err.message);
   }
   return merged;

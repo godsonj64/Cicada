@@ -45,6 +45,7 @@ function collectFiles(workspaceDir) {
     for (const e of entries) {
       if (out.length >= MAX_FILES || total >= MAX_TOTAL_BYTES) return;
       if (e.name.startsWith('.')) continue;
+      if (e.isSymbolicLink()) continue;
       const abs = path.join(dir, e.name);
       const r = rel ? rel + '/' + e.name : e.name;
       if (e.isDirectory()) { if (!SKIP_DIRS.has(e.name)) walk(abs, r); continue; }
@@ -141,6 +142,7 @@ function restore(workspaceDir, id) {
     let entries = [];
     try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch (_) { return; }
     for (const e of entries) {
+      if (e.isSymbolicLink()) continue;
       const abs = path.join(dir, e.name);
       const r = rel ? rel + '/' + e.name : e.name;
       if (e.isDirectory()) { walk(abs, r); continue; }

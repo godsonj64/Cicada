@@ -48,8 +48,21 @@ function isInside(parent, child) {
 // the project root (path traversal guard for all file IPC).
 function resolveInProject(projectDir, relPath) {
   const clean = String(relPath == null ? '' : relPath).replace(/^[\\/]+/, '');
+  if (!clean || clean === '.') throw new Error('A project-relative path is required.');
   const abs = path.resolve(projectDir, clean);
   if (!isInside(projectDir, abs)) throw new Error('Path escapes the project: ' + relPath);
+  // A lexical containment check is not sufficient when a path component is a
+  // symlink/junction. Resolve the nearest existing ancestor and make sure its real
+  // target remains inside the real project root before any read/write/delete occurs.
+  const realRoot = fs.realpathSync(projectDir);
+  let existing = abs;
+  while (!fs.existsSync(existing)) {
+    const parent = path.dirname(existing);
+    if (parent === existing) break;
+    existing = parent;
+  }
+  const realExisting = fs.realpathSync(existing);
+  if (!isInside(realRoot, realExisting)) throw new Error('Path resolves outside the project: ' + relPath);
   return abs;
 }
 
@@ -134,6 +147,7 @@ function tree(dir, maxDepth) {
     const out = [];
     for (const d of entries) {
       if (IGNORE.has(d.name)) continue;
+      if (d.isSymbolicLink()) continue;
       const childRel = rel ? rel + '/' + d.name : d.name;
       if (d.isDirectory()) {
         out.push({ type: 'dir', name: d.name, path: childRel, children: depth < cap ? walk(path.join(abs, d.name), childRel, depth + 1) : [] });
@@ -194,8 +208,94 @@ function rename(projectDir, fromRel, toRel) {
   return to;
 }
 
+const TEXT_EXTS = new Set([
+  '.py', '.pyi', '.js', '.jsx', '.ts', '.tsx', '.json', '.md', '.txt', '.csv',
+  '.html', '.css', '.scss', '.yml', '.yaml', '.toml', '.ini', '.cfg', '.sh',
+  '.ps1', '.bat', '.sql', '.r', '.java', '.c', '.h', '.cpp', '.hpp', '.rs', '.go',
+]);
+
+// Fast, bounded project search for the global Search UI. It deliberately skips
+// generated/vendor directories, binary files, and huge files so a query cannot stall
+// the renderer on a model checkpoint or dataset.
+function search(projectDir, query, options) {
+  const needle = String(query || '').trim();
+  if (!needle) return [];
+  const opts = options || {};
+  const limit = Math.max(1, Math.min(Number(opts.limit) || 200, 500));
+  const caseSensitive = !!opts.caseSensitive;
+  const target = caseSensitive ? needle : needle.toLowerCase();
+  const results = [];
+  const walk = (dir, rel) => {
+    if (results.length >= limit) return;
+    let entries = [];
+    try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch (_) { return; }
+    for (const entry of entries) {
+      if (results.length >= limit) break;
+      if (IGNORE.has(entry.name) || entry.name.startsWith('_garm_plot_')) continue;
+      if (entry.isSymbolicLink()) continue;
+      const abs = path.join(dir, entry.name);
+      const childRel = rel ? rel + '/' + entry.name : entry.name;
+      if (entry.isDirectory()) { walk(abs, childRel); continue; }
+      let stat;
+      try { stat = fs.statSync(abs); } catch (_) { continue; }
+      if (stat.size > 1024 * 1024) continue;
+      const ext = path.extname(entry.name).toLowerCase();
+      if (ext && !TEXT_EXTS.has(ext)) continue;
+      let source;
+      try { source = fs.readFileSync(abs, 'utf8'); } catch (_) { continue; }
+      if (source.includes('\0')) continue;
+      const lines = source.split(/\r?\n/);
+      for (let i = 0; i < lines.length && results.length < limit; i += 1) {
+        const hay = caseSensitive ? lines[i] : lines[i].toLowerCase();
+        let from = 0;
+        while (results.length < limit) {
+          const column = hay.indexOf(target, from);
+          if (column < 0) break;
+          results.push({ path: childRel, line: i + 1, column: column + 1, preview: lines[i].trim().slice(0, 240) });
+          from = column + Math.max(1, target.length);
+        }
+      }
+    }
+  };
+  walk(projectDir, '');
+  return results;
+}
+
+// Lightweight project inventory used by Mission Control.
+function stats(projectDir) {
+  const out = { files: 0, lines: 0, bytes: 0, languages: {}, largest: [] };
+  const walk = (dir, rel) => {
+    let entries = [];
+    try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch (_) { return; }
+    for (const entry of entries) {
+      if (IGNORE.has(entry.name) || entry.name.startsWith('_garm_plot_')) continue;
+      if (entry.isSymbolicLink()) continue;
+      const abs = path.join(dir, entry.name);
+      const childRel = rel ? rel + '/' + entry.name : entry.name;
+      if (entry.isDirectory()) { walk(abs, childRel); continue; }
+      let stat;
+      try { stat = fs.statSync(abs); } catch (_) { continue; }
+      out.files += 1;
+      out.bytes += stat.size;
+      const ext = path.extname(entry.name).toLowerCase().slice(1) || 'other';
+      out.languages[ext] = (out.languages[ext] || 0) + 1;
+      out.largest.push({ path: childRel, bytes: stat.size });
+      if (stat.size <= 1024 * 1024 && (!path.extname(entry.name) || TEXT_EXTS.has(path.extname(entry.name).toLowerCase()))) {
+        try {
+          const buf = fs.readFileSync(abs);
+          if (!buf.includes(0)) out.lines += buf.toString('utf8').split(/\r?\n/).length;
+        } catch (_) { /* best effort */ }
+      }
+    }
+  };
+  walk(projectDir, '');
+  out.largest.sort((a, b) => b.bytes - a.bytes);
+  out.largest = out.largest.slice(0, 5);
+  return out;
+}
+
 module.exports = {
   projectsRoot, ensureSetup, list, create, tree, defaultFile,
   readFile, writeFile, createFile, createDir, rename,
-  resolveInProject, sanitizeProjectName, isInside, STARTER,
+  resolveInProject, sanitizeProjectName, isInside, search, stats, STARTER,
 };

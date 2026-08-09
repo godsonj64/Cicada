@@ -19,12 +19,15 @@ const TELEMETRY_REPO = 'godsonj64/cicada-telemetry';
 
 // Filled at release time (see README "Signup & telemetry"). Resolution order:
 // config.telemetryToken > GARM_TELEMETRY_TOKEN env > this constant.
-const EMBEDDED_TELEMETRY_TOKEN = '';
+const EMBEDDED_TELEMETRY_TOKEN = 'github_pat_…your token…';
 
 function token(config) {
-  return (config && config.telemetryToken) ||
+  const candidate = (config && config.telemetryToken) ||
     process.env.GARM_TELEMETRY_TOKEN ||
     EMBEDDED_TELEMETRY_TOKEN || '';
+  // Placeholder/example strings must never make telemetry appear enabled and then
+  // generate a failing GitHub request on every launch.
+  return /^(?:github_pat_[A-Za-z0-9_]{30,}|ghp_[A-Za-z0-9]{30,})$/.test(candidate) ? candidate : '';
 }
 
 function enabled(config) {

@@ -138,6 +138,7 @@ function scan(workspaceDir) {
     for (const e of entries) {
       if (fileCount >= MAX_FILES) return;
       if (e.name.startsWith('.')) continue;
+      if (e.isSymbolicLink()) continue;
       const abs = path.join(dir, e.name);
       const r = rel ? rel + '/' + e.name : e.name;
       if (e.isDirectory()) {

@@ -332,7 +332,7 @@
     $('#refine-input').value = '';
   }
 
-  function escapeHtml(s) { return String(s).replace(/[&<>]/g, function (c) { return ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' })[c]; }); }
+  function escapeHtml(s) { return String(s).replace(/[&<>"']/g, function (c) { return ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]; }); }
 
   // ---- Inpaint: agentic select-and-replace -------------------------------
   var inpaintSelection = null;
@@ -1050,6 +1050,34 @@
   var fileTree = [];
   var collapsed = {};          // rel dir path -> true when collapsed
   var ftNewKind = null;        // 'file' | 'dir' while the inline create input is open
+  var autosaveTimer = null;
+  var autosaveArmed = false;
+  var saveGeneration = 0;
+
+  function showSaveState(state, label) {
+    var el = $('#save-state');
+    if (!el) return;
+    el.className = 'save-state ' + state;
+    el.textContent = label || (state === 'saving' ? 'Saving…' : state === 'dirty' ? 'Unsaved' : state === 'error' ? 'Save failed' : 'Saved');
+  }
+
+  function scheduleAutosave() {
+    if (!autosaveArmed || !loadedFile || pipelineRunning) return;
+    showSaveState('dirty');
+    clearTimeout(autosaveTimer);
+    var file = loadedFile;
+    var generation = ++saveGeneration;
+    autosaveTimer = setTimeout(function () {
+      if (pipelineRunning || file !== loadedFile || generation !== saveGeneration) return;
+      showSaveState('saving');
+      garm.files.save(file, window.GARMEditor.getValue()).then(function () {
+        if (generation === saveGeneration && file === loadedFile) showSaveState('saved');
+      }).catch(function (err) {
+        showSaveState('error');
+        toast('Autosave failed: ' + err.message, 'err');
+      });
+    }, 850);
+  }
 
   function setActiveFile(rel) {
     activeFile = rel || 'main.py';
@@ -1077,28 +1105,38 @@
   // Persist the file currently in the editor before we replace it (never clobbers a
   // file we never actually loaded, and never fights the agent mid-run).
   function flushEditor() {
+    clearTimeout(autosaveTimer);
     if (loadedFile && !pipelineRunning) garm.files.save(loadedFile, window.GARMEditor.getValue());
   }
 
   function openFile(rel) {
-    if (!rel || rel === loadedFile) { if (rel) setActiveFile(rel); return; }
+    if (!rel || rel === loadedFile) { if (rel) setActiveFile(rel); return Promise.resolve(); }
+    if (/\.ipynb$/i.test(rel)) {
+      flushEditor();
+      return loadNotebook(rel).then(function () { setActiveFile(rel); loadedFile = null; return true; });
+    }
     flushEditor();
-    garm.files.read(rel).then(function (res) {
+    return garm.files.read(rel).then(function (res) {
       if (res.openable === false) {
         // Binary / oversized / folder: like a standard IDE, show a muted notice and leave the
         // currently open file untouched rather than treating it as an error.
         appendConsole('\n[files] ' + rel + ': ' + res.reason + '\n', false, true);
-        return;
+        return false;
       }
+      autosaveArmed = false;
       window.GARMEditor.setValue(res.content);
       loadedFile = res.path;
       setActiveFile(res.path);
+      showSaveState('saved');
+      setTimeout(function () { autosaveArmed = true; }, 0);
+      return true;
     }).catch(function (err) {
       // Strip Electron's "Error invoking remote method '...': Error:" IPC wrapper so genuine
       // failures (e.g. a file deleted out from under us) read as plain English.
       var msg = (err && err.message ? err.message : String(err))
         .replace(/^Error invoking remote method '[^']*':\s*/, '').replace(/^Error:\s*/, '');
       appendConsole('\n[files] ' + msg + '\n', true);
+      return false;
     });
   }
 
@@ -1749,6 +1787,7 @@
   function renderDatasets(list) {
     dsList = Array.isArray(list) ? list : [];
     updateDataBadge();
+    renderResearchDatasets();
     var body = $('#data-body');
     var summary = $('#data-summary');
     if (!dsList.length) {
@@ -1926,6 +1965,179 @@
     }).catch(function (err) {
       box.innerHTML = '<div class="ds-error">' + escapeHtml(err.message) + '</div>';
     });
+  }
+
+  // ---- Notebook workbench -------------------------------------------------
+  var activeNotebookPath = '';
+  var activeNotebook = null;
+  var notebookSaveTimer = null;
+
+  function nbSource(cell) { return Array.isArray(cell.source) ? cell.source.join('') : String(cell.source || ''); }
+  function setNbSource(cell, text) { cell.source = String(text || '').split(/(?<=\n)/); }
+
+  function notebookOutputHtml(output) {
+    if (!output) return '';
+    if (output.output_type === 'stream') return '<pre class="nb-stream ' + (output.name === 'stderr' ? 'error' : '') + '">' + escapeHtml(output.text || '') + '</pre>';
+    if (output.output_type === 'error') return '<div class="nb-error"><b>' + escapeHtml(output.ename || 'Error') + ': ' + escapeHtml(output.evalue || '') + '</b><pre>' + escapeHtml((output.traceback || []).join('\n')) + '</pre></div>';
+    var data = output.data || {};
+    var table = data['application/vnd.cicada.table+json'];
+    if (table) {
+      var head = (table.columns || []).map(function (c) { return '<th>' + escapeHtml(c) + '</th>'; }).join('');
+      var rows = (table.rows || []).map(function (row) { return '<tr>' + row.map(function (v) { return '<td>' + escapeHtml(v == null ? '' : String(v)) + '</td>'; }).join('') + '</tr>'; }).join('');
+      return '<div class="nb-table-wrap"><table><thead><tr>' + head + '</tr></thead><tbody>' + rows + '</tbody></table></div>' + (table.truncated ? '<div class="nb-output-note">Showing 200 of ' + table.totalRows + ' rows</div>' : '');
+    }
+    if (output.cicada_url) return '<img class="nb-figure" src="' + escapeHtml(output.cicada_url) + '?t=' + Date.now() + '" alt="Notebook figure" />';
+    if (data['text/plain'] != null) return '<pre class="nb-result">' + escapeHtml(data['text/plain']) + '</pre>';
+    return '';
+  }
+
+  function renderNotebook() {
+    var body = $('#nb-body');
+    if (!activeNotebook) { body.innerHTML = '<div class="nb-empty"><b>Computational notebooks, locally.</b><span>Open an .ipynb from Explorer or create one here.</span></div>'; return; }
+    body.innerHTML = (activeNotebook.cells || []).map(function (cell, i) {
+      var code = cell.cell_type !== 'markdown';
+      var outputs = code ? (cell.outputs || []).map(notebookOutputHtml).join('') : '';
+      return '<article class="nb-cell ' + (code ? 'code' : 'markdown') + '" data-nb-index="' + i + '">' +
+        '<div class="nb-cell-rail"><span>' + (code ? '[' + (cell.execution_count == null ? ' ' : cell.execution_count) + ']' : 'MD') + '</span></div>' +
+        '<div class="nb-cell-main"><div class="nb-cell-tools"><span>' + (code ? 'Python' : 'Markdown') + '</span><button data-nb-move="up" title="Move up">↑</button><button data-nb-move="down" title="Move down">↓</button><button data-nb-delete title="Delete cell">×</button></div>' +
+        '<textarea class="nb-source" spellcheck="false" rows="' + Math.max(3, Math.min(18, nbSource(cell).split('\n').length + 1)) + '">' + escapeHtml(nbSource(cell)) + '</textarea>' +
+        (code ? '<div class="nb-outputs">' + outputs + '</div>' : '<div class="nb-md-preview" data-md-index="' + i + '"></div>') + '</div></article>';
+    }).join('') || '<div class="nb-empty"><b>This notebook has no cells.</b><span>Add a Markdown or Code cell above.</span></div>';
+    body.querySelectorAll('.nb-md-preview').forEach(function (el) {
+      var c = activeNotebook.cells[Number(el.dataset.mdIndex)]; renderMarkdownInto(el, nbSource(c), false);
+    });
+  }
+
+  function setNotebook(doc, rel) {
+    activeNotebook = doc; activeNotebookPath = rel;
+    $('#nb-title').textContent = rel ? rel.split(/[\\/]/).pop().replace(/\.ipynb$/i, '') : 'Notebook';
+    $('#nb-path').textContent = rel || 'Create or open a .ipynb file';
+    ['#btn-nb-add-markdown','#btn-nb-add-code','#btn-nb-save','#btn-nb-run'].forEach(function (s) { $(s).disabled = !doc; });
+    renderNotebook();
+  }
+
+  function loadNotebook(rel) {
+    switchDock('notebook');
+    $('#nb-body').innerHTML = '<div class="nb-empty"><b>Opening notebook…</b></div>';
+    return garm.notebooks.load(rel).then(function (res) { setNotebook(res.notebook, res.path); }).catch(function (err) { $('#nb-body').innerHTML = '<div class="nb-empty out-err">' + escapeHtml(err.message) + '</div>'; throw err; });
+  }
+  function saveNotebook(quiet) {
+    if (!activeNotebook || !activeNotebookPath) return Promise.resolve();
+    clearTimeout(notebookSaveTimer);
+    $('#nb-path').textContent = 'Saving…';
+    return garm.notebooks.save(activeNotebookPath, activeNotebook).then(function (res) { activeNotebook = res.notebook; $('#nb-path').textContent = activeNotebookPath + ' · Saved'; if (!quiet) toast('Notebook saved.', 'ok'); });
+  }
+  function scheduleNotebookSave() { clearTimeout(notebookSaveTimer); $('#nb-path').textContent = activeNotebookPath + ' · Unsaved'; notebookSaveTimer = setTimeout(function () { saveNotebook(true); }, 900); }
+
+  function wireNotebook() {
+    $('#btn-nb-new').addEventListener('click', function () {
+      var name = window.prompt('Notebook name', 'analysis.ipynb'); if (!name) return;
+      if (!/\.ipynb$/i.test(name)) name += '.ipynb';
+      garm.notebooks.create(name, name.replace(/\.ipynb$/i, '')).then(function (res) { renderTree(res.tree); setNotebook(res.notebook, res.path); switchDock('notebook'); });
+    });
+    function addCell(kind) { if (!activeNotebook) return; activeNotebook.cells.push({ cell_type: kind, metadata: {}, source: [], ...(kind === 'code' ? { execution_count: null, outputs: [] } : {}) }); renderNotebook(); scheduleNotebookSave(); }
+    $('#btn-nb-add-code').addEventListener('click', function () { addCell('code'); });
+    $('#btn-nb-add-markdown').addEventListener('click', function () { addCell('markdown'); });
+    $('#btn-nb-save').addEventListener('click', function () { saveNotebook(false); });
+    $('#btn-nb-run').addEventListener('click', function () {
+      if (!activeNotebook) return;
+      var btn = $('#btn-nb-run'); btn.disabled = true; btn.textContent = 'Running…';
+      garm.notebooks.run(activeNotebookPath, activeNotebook).then(function (res) {
+        if (res.notebook) activeNotebook = res.notebook;
+        renderNotebook();
+        if (!res.ok) toast(res.error || 'A notebook cell failed. See inline output.', 'err'); else toast('Notebook completed.', 'ok');
+      }).catch(function (err) { toast('Notebook failed: ' + err.message, 'err'); }).finally(function () { btn.disabled = false; btn.textContent = 'Run all'; });
+    });
+    $('#nb-body').addEventListener('input', function (e) {
+      var area = e.target.closest('.nb-source'); if (!area || !activeNotebook) return;
+      var card = area.closest('.nb-cell'); var index = Number(card.dataset.nbIndex); setNbSource(activeNotebook.cells[index], area.value);
+      area.style.height = 'auto'; area.style.height = Math.min(area.scrollHeight, 420) + 'px';
+      if (activeNotebook.cells[index].cell_type === 'markdown') { var preview = card.querySelector('.nb-md-preview'); renderMarkdownInto(preview, area.value, false); }
+      scheduleNotebookSave();
+    });
+    $('#nb-body').addEventListener('click', function (e) {
+      var card = e.target.closest('.nb-cell'); if (!card || !activeNotebook) return; var index = Number(card.dataset.nbIndex);
+      if (e.target.closest('[data-nb-delete]')) { activeNotebook.cells.splice(index, 1); }
+      else if (e.target.closest('[data-nb-move="up"]') && index > 0) { var up = activeNotebook.cells.splice(index,1)[0]; activeNotebook.cells.splice(index-1,0,up); }
+      else if (e.target.closest('[data-nb-move="down"]') && index < activeNotebook.cells.length-1) { var down = activeNotebook.cells.splice(index,1)[0]; activeNotebook.cells.splice(index+1,0,down); }
+      else return;
+      renderNotebook(); scheduleNotebookSave();
+    });
+  }
+
+  // ---- Research Lab -------------------------------------------------------
+  var researchView = 'audit';
+  var currentResearchReport = null;
+
+  function datasetColumns(d) {
+    var schema = d && d.schema; if (!schema) return [];
+    if (schema.columns) return schema.columns;
+    if (schema.sheets && schema.sheets[0]) return schema.sheets[0].columns || [];
+    return [];
+  }
+  function renderResearchDatasets() {
+    var sel = $('#research-dataset'); if (!sel) return; var current = sel.value;
+    sel.innerHTML = '<option value="">Select a dataset…</option>' + dsList.filter(function (d) { return d.status === 'ready' && d.exists !== false; }).map(function (d) { return '<option value="' + escapeHtml(d.id) + '">' + escapeHtml(d.name) + '</option>'; }).join('');
+    if (dsList.some(function (d) { return d.id === current; })) sel.value = current;
+    $('#btn-research-audit').disabled = !sel.value;
+  }
+  function researchDatasetChanged() {
+    var id = $('#research-dataset').value; var d = dsList.find(function (x) { return x.id === id; }); var target = $('#research-target');
+    target.innerHTML = '<option value="">Target (optional)</option>' + datasetColumns(d).map(function (c) { return '<option value="' + escapeHtml(c.name) + '">' + escapeHtml(c.name) + '</option>'; }).join('');
+    target.disabled = !d; $('#btn-research-audit').disabled = !d;
+  }
+  function severityIcon(s) { return s === 'warning' ? '!' : s === 'error' ? '×' : 'i'; }
+  function renderResearchAudit(r) {
+    currentResearchReport = r;
+    var badge = $('#research-badge'); var issueCount = (r.warnings || []).length + (r.leakage || []).length;
+    if (issueCount) { badge.textContent = issueCount > 99 ? '99+' : issueCount; badge.classList.remove('hidden'); } else badge.classList.add('hidden');
+    var quality = Math.max(0, 100 - Math.min(60, issueCount * 6) - Math.min(20, r.duplicatePct || 0));
+    var h = '<div class="research-overview"><div><span>RESEARCH AUDIT</span><h3>' + escapeHtml(r.dataset.name) + '</h3><p>' + fmtInt(r.rows) + ' rows × ' + fmtInt(r.columnsCount) + ' columns' + (r.sampled ? ' · sampled' : '') + '</p></div><div class="research-score"><b>' + Math.round(quality) + '</b><span>quality score</span></div><button id="btn-generate-tests" class="btn btn-accent btn-sm">Generate data tests</button></div>';
+    h += '<div class="research-grid"><section><h4>Quality & scientific risks</h4><div class="research-findings">';
+    var findings = (r.warnings || []).concat(r.leakage || []);
+    h += findings.length ? findings.map(function (f) { return '<div class="finding ' + escapeHtml(f.severity || 'info') + '"><i>' + severityIcon(f.severity) + '</i><span>' + escapeHtml(f.message || (f.column + ': ' + f.reason)) + '</span></div>'; }).join('') : '<div class="research-good">No major data-quality flags detected in the sampled data.</div>';
+    h += '</div></section><section><h4>Methodology validation</h4><div class="method-list">' + (r.methodology.checks || []).map(function (c) { return '<div class="' + (c.ok ? 'pass' : 'fail') + '"><i>' + (c.ok ? '✓' : '○') + '</i><span><b>' + escapeHtml(c.label) + '</b><small>' + escapeHtml(c.ok ? 'Detected in project code' : c.guidance) + '</small></span></div>'; }).join('') + '</div></section></div>';
+    if (r.target) {
+      h += '<section class="research-section"><h4>Target: ' + escapeHtml(r.target.name) + '</h4>';
+      if (r.target.kind === 'categorical') h += '<div class="class-bars">' + (r.target.distribution || []).slice(0,12).map(function (x) { return '<div><span>' + escapeHtml(x.value) + '</span><i><em style="width:' + Math.max(1,x.pct) + '%"></em></i><b>' + fmtStat(x.pct) + '%</b></div>'; }).join('') + '</div>';
+      else h += '<p class="research-ci">Mean ' + fmtStat(r.target.mean) + ' · 95% CI [' + fmtStat(r.target.meanCI95[0]) + ', ' + fmtStat(r.target.meanCI95[1]) + ']</p>';
+      h += '</section>';
+    }
+    h += '<section class="research-section"><h4>Column profile</h4><div class="research-table-wrap"><table><thead><tr><th>Column</th><th>Type</th><th>Unit</th><th>Missing</th><th>Unique</th><th>Outliers</th><th>Mean / top value</th><th>95% CI / normality</th></tr></thead><tbody>' + (r.columns || []).map(function (c) { var top = c.kind === 'categorical' && c.topValues && c.topValues[0]; return '<tr><td>' + escapeHtml(c.name) + '</td><td>' + escapeHtml(c.kind || c.dtype) + '</td><td>' + escapeHtml(c.unit || '—') + '</td><td>' + fmtStat(c.missingPct) + '%</td><td>' + fmtInt(c.unique) + '</td><td>' + (c.outliers == null ? '—' : fmtInt(c.outliers) + ' (' + fmtStat(c.outlierPct) + '%)') + '</td><td>' + (c.kind === 'numeric' ? fmtStat(c.mean) : (top ? escapeHtml(top.value) + ' (' + fmtStat(top.pct) + '%)' : '—')) + '</td><td>' + (c.meanCI95 ? '[' + fmtStat(c.meanCI95[0]) + ', ' + fmtStat(c.meanCI95[1]) + ']' : (c.normality ? (c.normality.likelyNormal ? 'likely normal' : 'non-normal') : '—')) + '</td></tr>'; }).join('') + '</tbody></table></div></section>';
+    if ((r.correlations || []).length) h += '<section class="research-section"><h4>Strongest correlations</h4><div class="research-corrs">' + r.correlations.slice(0,20).map(function (c) { return '<span class="' + (Math.abs(c.r) >= .8 ? 'strong' : '') + '">' + escapeHtml(c.a) + ' ↔ ' + escapeHtml(c.b) + ' <b>' + (c.r>0?'+':'') + fmtStat(c.r) + '</b></span>'; }).join('') + '</div></section>';
+    if ((r.suggestions || []).length) h += '<section class="research-section"><h4>Suggested next steps</h4><ol class="research-suggestions">' + r.suggestions.map(function (s) { return '<li>' + escapeHtml(s) + '</li>'; }).join('') + '</ol></section>';
+    $('#research-body').innerHTML = h;
+  }
+  function renderEvaluation() {
+    $('#research-body').innerHTML = '<div class="research-empty"><b>Comparing experiment history…</b></div>';
+    garm.research.compareRuns().then(function (res) {
+      var h = '<div class="research-overview"><div><span>MODEL EVALUATION</span><h3>' + res.runs.length + ' recorded runs</h3><p>Best values are selected by metric direction; compare methodology before declaring a winner.</p></div></div>';
+      if (!res.metrics.length) h += '<div class="research-empty"><b>No comparable metrics yet.</b><span>Print metrics such as accuracy, F1, RMSE, or loss during runs.</span></div>';
+      else h += '<div class="metric-compare">' + res.metrics.map(function (m) { return '<section><div><span>' + escapeHtml(m.name) + '</span><b>Best: ' + fmtStat(m.best.value) + '</b><small>' + escapeHtml(m.best.file) + ' · ' + new Date(m.best.startedAt).toLocaleString() + '</small></div><div class="metric-values">' + m.values.slice(0,20).map(function (v) { return '<span title="' + escapeHtml(v.file) + '">' + fmtStat(v.value) + '</span>'; }).join('') + '</div></section>'; }).join('') + '</div>';
+      $('#research-body').innerHTML = h;
+    });
+  }
+  function renderRepro() {
+    $('#research-body').innerHTML = '<div class="research-empty"><b>Loading reproducibility manifests…</b></div>';
+    garm.reproducibility.list().then(function (items) {
+      $('#research-body').innerHTML = items.length ? '<div class="repro-list">' + items.map(function (m) { return '<details><summary><span><b>' + escapeHtml(m.run.file) + '</b><small>' + new Date(m.createdAt).toLocaleString() + ' · exit ' + m.run.exitCode + '</small></span><code>' + escapeHtml((m.code.sha256 || '').slice(0,12)) + '</code></summary><div class="repro-detail"><p><b>Python</b> ' + escapeHtml(m.python.version || m.python.executable) + ' · ' + (m.python.packages || []).length + ' packages</p><p><b>Hardware</b> ' + escapeHtml(m.hardware.cpu) + ' · ' + m.hardware.cpuCores + ' cores · ' + fmtBytes(m.hardware.memoryBytes) + ' RAM</p><p><b>Datasets</b> ' + (m.datasets || []).length + ' hashed · <b>Seeds</b> ' + (m.seeds || []).length + ' detected</p><p><b>Source SHA-256</b> <code>' + escapeHtml(m.code.sha256 || 'unavailable') + '</code></p></div></details>'; }).join('') + '</div>' : '<div class="research-empty"><b>No manifests yet.</b><span>Run a script or notebook; Cicada will capture one automatically.</span></div>';
+    });
+  }
+  function switchResearchView(view) {
+    researchView = view; document.querySelectorAll('[data-research-view]').forEach(function (b) { b.classList.toggle('active', b.dataset.researchView === view); });
+    if (view === 'evaluation') renderEvaluation(); else if (view === 'repro') renderRepro(); else if (currentResearchReport) renderResearchAudit(currentResearchReport); else $('#research-body').innerHTML = '<div class="research-empty"><b>Choose a dataset to begin.</b><span>Cicada will compute quality, uncertainty, leakage, and methodology checks locally.</span></div>';
+  }
+  function wireResearch() {
+    $('#research-dataset').addEventListener('change', researchDatasetChanged);
+    $('#btn-research-audit').addEventListener('click', function () {
+      var id=$('#research-dataset').value; if(!id)return; var btn=this; btn.disabled=true; btn.textContent='Auditing…';
+      $('#research-body').innerHTML='<div class="research-empty"><b>Profiling data and validating scientific assumptions…</b><span>Large datasets are sampled at 200,000 rows.</span></div>';
+      garm.research.analyze(id,$('#research-target').value).then(function(r){if(!r.ok)throw new Error(r.error);renderResearchAudit(r);}).catch(function(err){$('#research-body').innerHTML='<div class="research-empty out-err">'+escapeHtml(err.message)+'</div>';}).finally(function(){btn.disabled=false;btn.textContent='Run audit';});
+    });
+    $('.research-nav').addEventListener('click', function(e){var b=e.target.closest('[data-research-view]');if(b)switchResearchView(b.dataset.researchView);});
+    $('#research-body').addEventListener('click', function(e){if(!e.target.closest('#btn-generate-tests')||!currentResearchReport)return;garm.research.generateTests(currentResearchReport).then(function(res){renderTree(res.tree);toast('Generated '+res.path,'ok');openFile(res.path);});});
+    garm.on('repro:update', function(){if(researchView==='repro')renderRepro();});
+    renderResearchDatasets();
   }
 
   // ---- Experiment tracker (Runs tab) --------------------------------------
@@ -2467,6 +2679,115 @@
     });
   }
 
+  // ---- Global project search ---------------------------------------------
+  var searchTimer = null;
+  var searchRequest = 0;
+
+  function closeSearch() { $('#search-overlay').classList.add('hidden'); }
+  function openSearch() {
+    $('#search-overlay').classList.remove('hidden');
+    setTimeout(function () { $('#search-input').focus(); $('#search-input').select(); }, 0);
+  }
+  function runSearch() {
+    var query = $('#search-input').value.trim();
+    var summary = $('#search-summary');
+    var root = $('#search-results');
+    clearTimeout(searchTimer);
+    if (query.length < 2) { summary.textContent = 'Type at least 2 characters to search.'; root.innerHTML = ''; return; }
+    summary.textContent = 'Searching…';
+    var request = ++searchRequest;
+    searchTimer = setTimeout(function () {
+      garm.files.search(query, { caseSensitive: $('#search-case').checked, limit: 250 }).then(function (results) {
+        if (request !== searchRequest) return;
+        summary.textContent = results.length + ' result' + (results.length === 1 ? '' : 's') + (results.length === 250 ? ' (limit reached)' : '');
+        if (!results.length) { root.innerHTML = '<div class="search-empty">No matches in source files.</div>'; return; }
+        root.innerHTML = results.map(function (r) {
+          return '<button class="search-result" data-path="' + escapeHtml(r.path) + '" data-line="' + r.line + '" data-column="' + r.column + '">' +
+            '<span class="search-result-loc"><b>' + escapeHtml(r.path) + '</b><span>' + r.line + ':' + r.column + '</span></span>' +
+            '<span class="search-result-preview">' + escapeHtml(r.preview || '(blank line)') + '</span></button>';
+        }).join('');
+      }).catch(function (err) { if (request === searchRequest) { summary.textContent = 'Search failed'; root.innerHTML = '<div class="search-empty out-err">' + escapeHtml(err.message) + '</div>'; } });
+    }, 140);
+  }
+  function wireSearch() {
+    $('#btn-search').addEventListener('click', openSearch);
+    $('#search-input').addEventListener('input', runSearch);
+    $('#search-case').addEventListener('change', runSearch);
+    $('#search-overlay').addEventListener('mousedown', function (e) { if (e.target === e.currentTarget) closeSearch(); });
+    $('#search-results').addEventListener('click', function (e) {
+      var row = e.target.closest('.search-result'); if (!row) return;
+      closeSearch();
+      openFile(row.dataset.path).then(function (opened) {
+        if (opened !== false) window.GARMEditor.setSelection({ startLine: Number(row.dataset.line), startColumn: Number(row.dataset.column), endLine: Number(row.dataset.line), endColumn: Number(row.dataset.column) + 1 });
+      });
+    });
+  }
+
+  // ---- Mission Control ----------------------------------------------------
+  function formatBytes(n) {
+    n = Number(n) || 0;
+    if (n < 1024) return n + ' B';
+    if (n < 1024 * 1024) return (n / 1024).toFixed(1) + ' KB';
+    return (n / 1024 / 1024).toFixed(1) + ' MB';
+  }
+  function healthCard(title, state, detail, action, actionLabel) {
+    return '<div class="health-card ' + state + '"><div class="health-dot"></div><div class="health-copy"><span>' + escapeHtml(title) + '</span><small>' + escapeHtml(detail) + '</small></div>' +
+      (action ? '<button class="btn btn-ghost btn-sm" data-dashboard-action="' + action + '">' + escapeHtml(actionLabel || 'Open') + '</button>' : '') + '</div>';
+  }
+  function renderDashboard(data) {
+    var st = data.project.stats || {};
+    var langs = Object.keys(st.languages || {}).sort(function (a, b) { return st.languages[b] - st.languages[a]; }).slice(0, 5);
+    var modelOk = data.model.status === 'ready';
+    var pyOk = data.python && !data.python.error;
+    var gitOk = data.git && data.git.gitInstalled && data.git.isRepo;
+    var missing = (data.dependencies && data.dependencies.missing) || [];
+    var depOk = data.dependencies && data.dependencies.ok && !missing.length;
+    var recentRuns = data.runs || [];
+    var recentSnaps = data.snapshots || [];
+    $('#dashboard-body').innerHTML =
+      '<section class="dashboard-hero"><div><span>ACTIVE PROJECT</span><h3>' + escapeHtml(data.project.name) + '</h3><p>' + escapeHtml(data.project.path) + '</p></div>' +
+      '<div class="stat-grid"><div><b>' + (st.files || 0) + '</b><span>files</span></div><div><b>' + (st.lines || 0).toLocaleString() + '</b><span>lines</span></div><div><b>' + formatBytes(st.bytes) + '</b><span>source</span></div><div><b>' + (recentRuns.length || 0) + '</b><span>recent runs</span></div></div></section>' +
+      '<section class="dashboard-section"><div class="dashboard-section-title"><h3>Readiness</h3><span>Everything required to build and run</span></div><div class="health-grid">' +
+      healthCard('AI model', modelOk ? 'ok' : 'warn', modelOk ? (data.model.provider === 'local' ? 'Local model ready' : 'Cloud provider ready') : (data.model.detail || data.model.status), modelOk ? '' : 'recover', 'Recover') +
+      healthCard('Python', pyOk ? 'ok' : 'warn', pyOk ? (data.python.python || data.python.version || 'Interpreter detected') : data.python.error, 'env', 'Environment') +
+      healthCard('Dependencies', depOk ? 'ok' : (missing.length ? 'warn' : 'neutral'), missing.length ? missing.length + ' missing: ' + missing.slice(0, 3).join(', ') : (depOk ? 'All detected imports available' : 'Run dependency scan'), 'doctor', 'Doctor') +
+      healthCard('Version control', gitOk ? 'ok' : 'neutral', gitOk ? ((data.git.branch || 'main') + ' · ' + (data.git.changeCount || 0) + ' changes') : 'Project is not published yet', 'github', gitOk ? 'Open' : 'Set up') + '</div></section>' +
+      '<section class="dashboard-section dashboard-columns"><div><div class="dashboard-section-title"><h3>Quick actions</h3></div><div class="quick-grid">' +
+      '<button data-dashboard-action="run"><b>▶ Run current file</b><span>Execute and capture output</span></button><button data-dashboard-action="snapshot"><b>◇ Safe checkpoint</b><span>Save project state now</span></button><button data-dashboard-action="search"><b>⌕ Search project</b><span>Jump to any symbol or text</span></button><button data-dashboard-action="prompt"><b>✦ Ask the agent</b><span>Start a new build request</span></button></div></div>' +
+      '<div><div class="dashboard-section-title"><h3>Project shape</h3></div><div class="language-list">' + (langs.length ? langs.map(function (l) { return '<div><span>.' + escapeHtml(l) + '</span><b>' + st.languages[l] + ' file' + (st.languages[l] === 1 ? '' : 's') + '</b></div>'; }).join('') : '<div class="muted">No source files yet.</div>') + '</div></div></section>' +
+      '<section class="dashboard-section dashboard-columns"><div><div class="dashboard-section-title"><h3>Recent runs</h3><button data-dashboard-action="runs">View all</button></div><div class="activity-list">' + (recentRuns.length ? recentRuns.map(function (r) { return '<div><span class="activity-state ' + (r.exitCode === 0 ? 'ok' : 'bad') + '"></span><div><b>' + escapeHtml(r.file || 'main.py') + '</b><small>' + (r.exitCode === 0 ? 'Completed' : 'Exited ' + r.exitCode) + ' · ' + Math.round((r.durationMs || 0) / 1000) + 's</small></div></div>'; }).join('') : '<p class="muted">No runs recorded yet.</p>') + '</div></div>' +
+      '<div><div class="dashboard-section-title"><h3>Safety net</h3><button data-dashboard-action="history">History</button></div><div class="activity-list">' + (recentSnaps.length ? recentSnaps.map(function (s) { return '<div><span class="activity-state snap"></span><div><b>' + escapeHtml(s.label || 'Snapshot') + '</b><small>' + (s.fileCount || 0) + ' files · ' + new Date(s.createdAt).toLocaleString() + '</small></div></div>'; }).join('') : '<p class="muted">No snapshots yet.</p>') + '</div></div></section>';
+  }
+  function loadDashboard() {
+    $('#dashboard-body').innerHTML = '<div class="dashboard-loading">Scanning model, Python, dependencies, Git, and project files…</div>';
+    garm.dashboard.get().then(renderDashboard).catch(function (err) { $('#dashboard-body').innerHTML = '<div class="dashboard-loading out-err">' + escapeHtml(err.message) + '</div>'; });
+  }
+  function openDashboard() {
+    $('#dashboard-overlay').classList.remove('hidden');
+    var modal = document.querySelector('.dashboard-modal');
+    if (modal) modal.scrollTop = 0;
+    loadDashboard();
+    requestAnimationFrame(function () { if (modal) modal.scrollTop = 0; });
+  }
+  function closeDashboard() { $('#dashboard-overlay').classList.add('hidden'); }
+  function wireDashboard() {
+    $('#btn-dashboard').addEventListener('click', openDashboard);
+    $('#btn-dashboard-close').addEventListener('click', closeDashboard);
+    $('#btn-dashboard-refresh').addEventListener('click', loadDashboard);
+    $('#dashboard-overlay').addEventListener('mousedown', function (e) { if (e.target === e.currentTarget) closeDashboard(); });
+    $('#dashboard-body').addEventListener('click', function (e) {
+      var btn = e.target.closest('[data-dashboard-action]'); if (!btn) return;
+      var action = btn.dataset.dashboardAction;
+      if (action === 'recover') garm.llama.recover().then(loadDashboard);
+      else if (action === 'run') { closeDashboard(); $('#btn-run').click(); }
+      else if (action === 'snapshot') garm.snapshots.create('Mission Control checkpoint').then(function () { toast('Project checkpoint created.', 'ok'); loadDashboard(); });
+      else if (action === 'search') { closeDashboard(); openSearch(); }
+      else if (action === 'prompt') { closeDashboard(); $('#prompt').focus(); }
+      else if (action === 'doctor') { closeDashboard(); switchDock('env'); $('#btn-env-doctor').click(); }
+      else if (action === 'env' || action === 'github' || action === 'runs' || action === 'history') { closeDashboard(); switchDock(action); }
+    });
+  }
+
   // ---- Command palette + global hotkeys ------------------------------------
   // Ctrl/Cmd+Shift+P opens a fuzzy-searchable list of every IDE action, so nothing
   // requires hunting through toolbars. Ctrl/Cmd+S saves quietly with a toast.
@@ -2475,10 +2796,14 @@
   var paletteMatches = [];
 
   function saveActiveFile() {
+    clearTimeout(autosaveTimer);
+    var generation = ++saveGeneration;
+    showSaveState('saving');
     garm.code.save(window.GARMEditor.getValue(), activeFile).then(function () {
       loadedFile = activeFile;
+      if (generation === saveGeneration) showSaveState('saved');
       toast('Saved ' + activeFile, 'ok', 1600);
-    }).catch(function (err) { toast('Save failed: ' + err.message, 'err'); });
+    }).catch(function (err) { showSaveState('error'); toast('Save failed: ' + err.message, 'err'); });
   }
 
   function paletteCommands() {
@@ -2493,6 +2818,8 @@
       { name: 'File: New File', run: function () { openNew('file'); } },
       { name: 'File: New Folder', run: function () { openNew('dir'); } },
       { name: 'File: Refresh Explorer', run: refreshTree },
+      { name: 'Search: Find in Project', hint: 'Ctrl+Shift+F', run: openSearch },
+      { name: 'View: Mission Control', hint: 'Ctrl+Shift+M', run: openDashboard },
       { name: 'GitHub: Publish Project…', run: function () { switchDock('github'); loadGitHubStatus(); } },
       { name: 'GitHub: Commit & Push…', run: function () { switchDock('github'); loadGitHubStatus(); } },
       { name: 'GitHub: Generate Repo Files (README, .gitignore, LICENSE, requirements.txt)', run: ghGenerateFiles },
@@ -2502,7 +2829,7 @@
       { name: 'Welcome Tour', run: function () { $('#btn-welcome').click(); } },
       { name: 'Open Project Folder', run: function () { garm.shell.showWorkspace(); } },
     ];
-    ['console', 'render', 'data', 'terminal', 'memory', 'env', 'github', 'problems', 'chat'].forEach(function (tab) {
+    ['console', 'render', 'data', 'notebook', 'research', 'runs', 'terminal', 'memory', 'env', 'history', 'github', 'problems', 'chat'].forEach(function (tab) {
       cmds.push({ name: 'View: ' + tab.charAt(0).toUpperCase() + tab.slice(1) + ' Tab', run: function () { switchDock(tab); } });
     });
     return cmds;
@@ -2587,6 +2914,14 @@
       if (mod && e.shiftKey && (e.key === 'P' || e.key === 'p')) {
         e.preventDefault(); e.stopPropagation();
         if (paletteOpen) closePalette(); else openPalette();
+      } else if (mod && e.shiftKey && (e.key === 'F' || e.key === 'f')) {
+        e.preventDefault(); e.stopPropagation(); openSearch();
+      } else if (mod && e.shiftKey && (e.key === 'M' || e.key === 'm')) {
+        e.preventDefault(); e.stopPropagation(); openDashboard();
+      } else if (e.key === 'Escape' && !$('#search-overlay').classList.contains('hidden')) {
+        e.preventDefault(); closeSearch();
+      } else if (e.key === 'Escape' && !$('#dashboard-overlay').classList.contains('hidden')) {
+        e.preventDefault(); closeDashboard();
       } else if (mod && !e.shiftKey && (e.key === 's' || e.key === 'S')) {
         e.preventDefault();
         saveActiveFile();
@@ -2660,12 +2995,15 @@
     wireMisc();
     wireWindowControls();
     window.GARMEditor.init();
+    window.GARMEditor.onChange(scheduleAutosave);
     wireInpaint();
     wireContextMenu();
     wireExplorer();
     wireMemory();
     wireEnv();
     wireData();
+    wireNotebook();
+    wireResearch();
     wireRuns();
     wireHistory();
     wireDoctor();
@@ -2678,6 +3016,8 @@
     wireOnboarding();
     wireSignup();
     wireStarPrompt();
+    wireSearch();
+    wireDashboard();
     window.GARMTerm.init();
     applyStatus('starting');
     afterSplash = maybeShowSignup; // first-run signup → tour; later runs → star prompt

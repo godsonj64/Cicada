@@ -124,6 +124,12 @@
       <div id="project-menu" class="proj-menu hidden"></div>
     </div>
     <button id="btn-workspace" class="btn btn-ghost btn-sm" title="Open project folder in Finder">Workspace</button>
+    <button id="btn-search" class="icon-btn" title="Search project (Ctrl+Shift+F)" aria-label="Search project">
+      <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="6.5"/><path d="M16 16l4 4"/></svg>
+    </button>
+    <button id="btn-dashboard" class="icon-btn" title="Mission Control (Ctrl+Shift+M)" aria-label="Open Mission Control">
+      <svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
+    </button>
     <button id="btn-welcome" class="icon-btn" title="Welcome guide" aria-label="Open the welcome guide">
       <svg viewBox="0 0 24 24"><path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9L12 3z"/></svg>
     </button>
@@ -212,6 +218,7 @@
         <div class="editor-toolbar">
           <div class="file-tab" id="file-tab"><span class="stream-dot"></span><span class="file-name" id="file-name">main.py</span></div>
           <div class="toolbar-spacer"></div>
+          <span id="save-state" class="save-state saved" aria-live="polite">Saved</span>
           <button id="btn-edit-selection" class="btn btn-ghost" title="Rewrite the selected code with the agent (⌘K)">Edit Selection</button>
           <button id="btn-compile" class="btn btn-ghost">Compile</button>
           <button id="btn-run" class="btn btn-accent">Run</button>
@@ -236,6 +243,8 @@
           <button class="dock-tab active" data-tab="console">Console</button>
           <button class="dock-tab" data-tab="render">Render</button>
           <button class="dock-tab" data-tab="data">Data<span id="data-badge" class="dock-badge hidden"></span></button>
+          <button class="dock-tab" data-tab="notebook">Notebook</button>
+          <button class="dock-tab" data-tab="research">Research<span id="research-badge" class="dock-badge hidden"></span></button>
           <button class="dock-tab" data-tab="runs">Runs<span id="runs-badge" class="dock-badge hidden"></span></button>
           <button class="dock-tab" data-tab="terminal">Terminal</button>
           <button class="dock-tab" data-tab="memory">Memory</button>
@@ -275,6 +284,37 @@
                   <div class="data-empty-sub">Drag &amp; drop files anywhere, or use <b>Add data…</b> — CSV, Excel (.xlsx/.xls), and JSON. Cicada indexes each file, detects its schema, and makes it available to the agent.</div>
                 </div>
               </div>
+            </div>
+          </div>
+          <div class="dock-pane" data-pane="notebook">
+            <div class="nb-wrap">
+              <div class="nb-head">
+                <div><b id="nb-title">Notebook</b><span id="nb-path">Create or open a .ipynb file</span></div>
+                <div class="toolbar-spacer"></div>
+                <button id="btn-nb-new" class="btn btn-ghost btn-sm">New notebook</button>
+                <button id="btn-nb-add-markdown" class="btn btn-ghost btn-sm" disabled>+ Markdown</button>
+                <button id="btn-nb-add-code" class="btn btn-ghost btn-sm" disabled>+ Code</button>
+                <button id="btn-nb-save" class="btn btn-ghost btn-sm" disabled>Save</button>
+                <button id="btn-nb-run" class="btn btn-accent btn-sm" disabled>Run all</button>
+              </div>
+              <div id="nb-body" class="nb-scroll"><div class="nb-empty"><b>Computational notebooks, locally.</b><span>Open an .ipynb from Explorer or create one here. Code cells share state; tables, figures, Markdown, and errors render inline.</span></div></div>
+            </div>
+          </div>
+          <div class="dock-pane" data-pane="research">
+            <div class="research-wrap">
+              <div class="research-head">
+                <div><b>Research Lab</b><span>Profile data, challenge assumptions, validate methods, and compare experiments.</span></div>
+                <div class="toolbar-spacer"></div>
+                <select id="research-dataset" class="research-select"><option value="">Select a dataset…</option></select>
+                <select id="research-target" class="research-select" disabled><option value="">Target (optional)</option></select>
+                <button id="btn-research-audit" class="btn btn-accent btn-sm" disabled>Run audit</button>
+              </div>
+              <div class="research-nav">
+                <button class="active" data-research-view="audit">Data &amp; validation</button>
+                <button data-research-view="evaluation">Experiment evaluation</button>
+                <button data-research-view="repro">Reproducibility</button>
+              </div>
+              <div id="research-body" class="research-scroll"><div class="research-empty"><b>Choose a dataset to begin.</b><span>Cicada will compute quality, imbalance, outliers, correlations, uncertainty, leakage risks, and methodology checks locally.</span></div></div>
             </div>
           </div>
           <div class="dock-pane" data-pane="runs">
@@ -373,6 +413,31 @@
       </div>
     </section>
   </main>
+
+  <!-- Global source search (Ctrl/Cmd+Shift+F). -->
+  <div id="search-overlay" class="utility-overlay hidden" role="dialog" aria-modal="true" aria-label="Search project">
+    <div class="search-modal">
+      <div class="search-head">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6.5"/><path d="M16 16l4 4"/></svg>
+        <input id="search-input" type="search" placeholder="Search every file in this project…" autocomplete="off" spellcheck="false" />
+        <label class="search-case"><input id="search-case" type="checkbox" /> Aa</label>
+        <kbd>Esc</kbd>
+      </div>
+      <div id="search-summary" class="search-summary">Type at least 2 characters to search.</div>
+      <div id="search-results" class="search-results"></div>
+    </div>
+  </div>
+
+  <!-- Unified project health and activity dashboard. -->
+  <div id="dashboard-overlay" class="utility-overlay hidden" role="dialog" aria-modal="true" aria-label="Mission Control">
+    <div class="dashboard-modal">
+      <div class="dashboard-head">
+        <div><div class="dashboard-kicker">CICADA</div><h2>Mission Control</h2><p>Project health, activity, and the fastest path to your next action.</p></div>
+        <div class="dashboard-head-actions"><button id="btn-dashboard-refresh" class="btn btn-ghost btn-sm">Refresh</button><button id="btn-dashboard-close" class="icon-btn" aria-label="Close">×</button></div>
+      </div>
+      <div id="dashboard-body" class="dashboard-body"><div class="dashboard-loading">Scanning project…</div></div>
+    </div>
+  </div>
 
   <!-- Settings modal -->
   <div id="settings-overlay" class="overlay hidden">

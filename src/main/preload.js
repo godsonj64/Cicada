@@ -21,6 +21,7 @@ const EVENT_CHANNELS = new Set([
   'experiments:update',
   'snapshots:update',
   'sysmon:update',
+  'repro:update',
 ]);
 
 contextBridge.exposeInMainWorld('garm', {
@@ -80,6 +81,7 @@ contextBridge.exposeInMainWorld('garm', {
   },
   files: {
     tree: () => ipcRenderer.invoke('files:tree'),
+    search: (query, options) => ipcRenderer.invoke('files:search', { query, options }),
     read: (path) => ipcRenderer.invoke('files:read', { path }),
     save: (path, content) => ipcRenderer.invoke('files:save', { path, content }),
     create: (path) => ipcRenderer.invoke('files:create', { path }),
@@ -99,6 +101,22 @@ contextBridge.exposeInMainWorld('garm', {
     reanalyze: (id) => ipcRenderer.invoke('datasets:reanalyze', { id }),
     insights: (id) => ipcRenderer.invoke('datasets:insights', { id }),
   },
+  notebooks: {
+    create: (path, title) => ipcRenderer.invoke('notebooks:create', { path, title }),
+    load: (path) => ipcRenderer.invoke('notebooks:load', { path }),
+    save: (path, notebook) => ipcRenderer.invoke('notebooks:save', { path, notebook }),
+    run: (path, notebook) => ipcRenderer.invoke('notebooks:run', { path, notebook }),
+  },
+  reproducibility: {
+    list: () => ipcRenderer.invoke('repro:list'),
+    get: (id) => ipcRenderer.invoke('repro:get', { id }),
+  },
+  research: {
+    analyze: (datasetId, target) => ipcRenderer.invoke('research:analyze', { datasetId, target }),
+    reports: () => ipcRenderer.invoke('research:reports'),
+    compareRuns: () => ipcRenderer.invoke('research:compareRuns'),
+    generateTests: (report) => ipcRenderer.invoke('research:generateTests', { report }),
+  },
   // Experiment tracker: metric-parsed run history (Runs tab).
   experiments: {
     list: () => ipcRenderer.invoke('experiments:list'),
@@ -117,6 +135,9 @@ contextBridge.exposeInMainWorld('garm', {
     create: (label) => ipcRenderer.invoke('snapshots:create', { label }),
     restore: (id) => ipcRenderer.invoke('snapshots:restore', { id }),
     remove: (id) => ipcRenderer.invoke('snapshots:remove', { id }),
+  },
+  dashboard: {
+    get: () => ipcRenderer.invoke('dashboard:get'),
   },
   // GitHub integration: repo status, one-click publish, and subsequent pushes.
   github: {

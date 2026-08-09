@@ -77,6 +77,15 @@ bar).
 - ⌨️ **Command palette** — Ctrl/Cmd+Shift+P reaches every action; Ctrl/Cmd+S saves; feedback arrives as toasts.
 - 🪟 **Runs on Windows, macOS, and Linux** — with a packaged Windows installer (`npm run dist:win`).
 
+- **Mission Control** — one view for model, Python, dependency and Git readiness, project shape, recent runs, snapshots, and one-click recovery actions.
+- **Global source search** — Ctrl/Cmd+Shift+F searches the entire project and jumps directly to a matching file and line.
+- **Safe autosave** — editor changes save after a short idle period with visible Saved/Saving/Unsaved/Failed state.
+- **Notebook workbench** — create, open, edit, reorder, save, and run Jupyter `.ipynb` cells with shared Python state, Markdown previews, inline tables, plots, stdout, and errors.
+- **Research Lab** — profile datasets for missing values, duplicates, imbalance, outliers, correlations, distributions, suspicious leakage, and practical cleaning suggestions.
+- **Scientific validation** — heuristic checks cover units, assumptions, train/test methodology, stratification, random seeds, statistical tests, and confidence intervals.
+- **Reproducible runs** — every script or notebook run records Python and package versions, seeds, dataset and source hashes, configuration, metrics, and hardware in a local manifest.
+- **Evaluation and tests** — compare metrics across runs and generate editable pytest data-quality checks directly from an audit.
+
 ## The Pipeline
 
 ```

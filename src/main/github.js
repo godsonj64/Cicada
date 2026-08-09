@@ -65,6 +65,20 @@ function webUrl(remoteUrl) {
   return u;
 }
 
+function samePath(a, b) {
+  const left = path.resolve(String(a || ''));
+  const right = path.resolve(String(b || ''));
+  return process.platform === 'win32' ? left.toLowerCase() === right.toLowerCase() : left === right;
+}
+
+// Git searches parent directories by default. Cicada must only operate on a repo
+// rooted at the active project; otherwise a project under (for example) the user's
+// home repo could accidentally stage and publish unrelated files.
+async function ownsRepository(dir) {
+  const root = await git(dir, ['rev-parse', '--show-toplevel']);
+  return root.ok && samePath(root.stdout.trim(), dir);
+}
+
 // ---- repository status -----------------------------------------------------------
 
 async function status(dir) {
@@ -85,8 +99,7 @@ async function status(dir) {
   };
   if (!version) return out;
 
-  const inside = await git(dir, ['rev-parse', '--is-inside-work-tree']);
-  out.isRepo = inside.ok && inside.stdout.trim() === 'true';
+  out.isRepo = await ownsRepository(dir);
   if (!out.isRepo) return out;
 
   const [branch, porcelain, remote, last, name, email] = await Promise.all([
@@ -143,6 +156,7 @@ function scanRequirements(dir) {
     try { entries = fs.readdirSync(d, { withFileTypes: true }); } catch (_) { return; }
     for (const e of entries) {
       if (e.name.startsWith('.') || SCAN_SKIP.has(e.name)) continue;
+      if (e.isSymbolicLink()) continue;
       const abs = path.join(d, e.name);
       if (e.isDirectory()) {
         // A directory with __init__.py (or any .py) is a local package, not a dependency.
@@ -231,7 +245,7 @@ function fileOutline(dir) {
   try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch (_) { return ''; }
   const lines = [];
   entries
-    .filter((e) => !e.name.startsWith('.') && !e.name.startsWith('_garm_') && !SCAN_SKIP.has(e.name))
+    .filter((e) => !e.isSymbolicLink() && !e.name.startsWith('.') && !e.name.startsWith('_garm_') && !SCAN_SKIP.has(e.name))
     .sort((a, b) => (a.isDirectory() === b.isDirectory() ? a.name.localeCompare(b.name) : (a.isDirectory() ? -1 : 1)))
     .forEach((e) => lines.push(e.isDirectory() ? e.name + '/' : e.name));
   return lines.join('\n');
@@ -285,8 +299,7 @@ function generateFiles(dir, opts) {
 // ---- commits ---------------------------------------------------------------------
 
 async function ensureRepo(dir) {
-  const inside = await git(dir, ['rev-parse', '--is-inside-work-tree']);
-  if (inside.ok && inside.stdout.trim() === 'true') return { ok: true, created: false };
+  if (await ownsRepository(dir)) return { ok: true, created: false };
   let r = await git(dir, ['init', '-b', 'main']);
   if (!r.ok) {
     // Older git without -b support.
