@@ -439,6 +439,16 @@ async function startLocalLlama() {
   if (modelOk) llama.start(); else pushStatus();
 }
 
+// True when local inference ought to be (re)started: we are in local mode and the server
+// is neither running nor already coming up, with no install/download in flight to trip
+// over. Shared by the manual pill-click recovery and the macOS window-reopen path so the
+// two cannot drift apart.
+function llamaNeedsRestart() {
+  return config.provider === 'local' && llama
+    && llama.status !== 'ready' && llama.status !== 'starting'
+    && !installingLlama && !downloadingModel;
+}
+
 function setupLlama() {
   llama = new LlamaServer(config);
   // In local mode the pill tracks the server; in deepseek mode currentStatus() ignores it.
@@ -548,10 +558,7 @@ function registerIpc() {
   // One-click recovery (status pill / error toasts): re-run the full local startup path —
   // find or download the binary, find or download the model, start the server.
   ipcMain.handle('llama:recover', async () => {
-    if (config.provider === 'local' && llama && llama.status !== 'ready' && llama.status !== 'starting'
-        && !installingLlama && !downloadingModel) {
-      await startLocalLlama();
-    }
+    if (llamaNeedsRestart()) await startLocalLlama();
     pushStatus();
     return currentStatus();
   });
@@ -1100,13 +1107,25 @@ app.whenReady().then(() => {
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
+    // Reopening from the dock used to give back a window with dead inference behind it,
+    // recoverable only by knowing to click the status pill. Restart it here so the window
+    // comes back usable — this also covers a server that died while no window was open.
+    if (llamaNeedsRestart()) startLocalLlama();
+    // start() is restart-safe and samples immediately, so the reopened window's CPU/RAM
+    // strip fills in at once instead of staying blank until the next interval.
+    sysmon.start((s) => send('sysmon:update', s));
   });
 });
 
 app.on('window-all-closed', () => {
+  // macOS keeps an app alive with no windows open, and 'activate' only recreates the
+  // window — so tearing inference down here stranded a live app with a dead model server.
+  // Leave it running (send() no-ops without a window) and clean up in 'before-quit'.
+  // Every other platform quits here, so stop everything first.
+  if (process.platform === 'darwin') return;
   if (llama) llama.stop();
   sysmon.stop();
-  if (process.platform !== 'darwin') app.quit();
+  app.quit();
 });
 
 app.on('before-quit', () => { if (llama) llama.stop(); sysmon.stop(); });
