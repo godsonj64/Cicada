@@ -107,6 +107,11 @@ function pickCudaBuild(assets, computeCap) {
 
 // Ordered asset-name patterns for the NON-CUDA backends (CPU / Metal). CUDA is handled
 // separately by pickCudaBuild so version selection and the "llama-" anchor are explicit.
+//
+// Windows builds ship as .zip, but the macOS and Linux artifacts are .tar.gz (llama.cpp
+// moved the POSIX releases to tarballs), so those patterns accept either extension —
+// matching only .zip found no asset at all and failed the install with "no prebuilt
+// binary is available for this platform".
 function assetPatterns(platform, arch) {
   if (platform === 'win32') {
     return [/bin-win-cpu-x64\.zip$/i, /bin-win-avx2-x64\.zip$/i, /bin-win-x64\.zip$/i, /win.*x64\.zip$/i];
@@ -114,11 +119,11 @@ function assetPatterns(platform, arch) {
   if (platform === 'darwin') {
     // The macOS arm64 build already includes Metal GPU support; nothing extra to select.
     return arch === 'arm64'
-      ? [/bin-macos-arm64\.zip$/i, /macos-arm64\.zip$/i]
-      : [/bin-macos-x64\.zip$/i, /macos-x64\.zip$/i];
+      ? [/bin-macos-arm64\.(?:zip|tar\.gz)$/i, /macos-arm64\.(?:zip|tar\.gz)$/i]
+      : [/bin-macos-x64\.(?:zip|tar\.gz)$/i, /macos-x64\.(?:zip|tar\.gz)$/i];
   }
   // linux and anything else
-  return [/bin-ubuntu-x64\.zip$/i, /ubuntu-x64\.zip$/i, /linux.*x64\.zip$/i];
+  return [/bin-ubuntu-x64\.(?:zip|tar\.gz)$/i, /ubuntu-x64\.(?:zip|tar\.gz)$/i, /linux.*x64\.(?:zip|tar\.gz)$/i];
 }
 
 // Choose the best build asset ({ name, browser_download_url }) for this machine/backend.
@@ -213,9 +218,16 @@ async function downloadTo(url, dest, onProgress) {
   return dest;
 }
 
-// Extract a .zip with whatever the OS already provides — no npm dependency.
-function extractZip(zipPath, destDir) {
+// Extract a release archive with whatever the OS already provides — no npm dependency.
+// Handles both the Windows .zip builds and the .tar.gz used for macOS/Linux.
+function extractArchive(zipPath, destDir) {
   fs.mkdirSync(destDir, { recursive: true });
+  if (/\.t(?:ar\.)?gz$/i.test(zipPath)) {
+    // tar reads gzip on every supported OS (bsdtar ships with Windows 10 1803+).
+    const r = spawnSync('tar', ['-xzf', zipPath, '-C', destDir], { encoding: 'utf8', windowsHide: true });
+    if (r.status === 0) return true;
+    throw new Error('Could not extract llama.cpp: ' + ((r.stderr || '').trim() || 'tar failed'));
+  }
   if (process.platform === 'win32') {
     // PowerShell's Expand-Archive is present on every supported Windows.
     const ps = `$ProgressPreference='SilentlyContinue'; Expand-Archive -LiteralPath '${zipPath.replace(/'/g, "''")}' -DestinationPath '${destDir.replace(/'/g, "''")}' -Force`;
@@ -265,7 +277,7 @@ async function ensureLlamaServer(opts) {
   emit('download', 'Downloading ' + asset.name + '…', 0);
   await downloadTo(asset.browser_download_url, zipPath, (pct) => emit('download', `Downloading llama.cpp (${label})… ` + pct + '%', pct));
   emit('extract', 'Extracting llama.cpp…');
-  extractZip(zipPath, outDir);
+  extractArchive(zipPath, outDir);
   try { fs.unlinkSync(zipPath); } catch (_) { /* keep the zip if it's locked */ }
 
   // A Windows CUDA build needs the CUDA runtime DLLs, shipped as a separate archive.
@@ -279,7 +291,7 @@ async function ensureLlamaServer(opts) {
       emit('download', 'Downloading CUDA runtime…', 0);
       await downloadTo(cudart.browser_download_url, cudartZip, (pct) => emit('download', 'Downloading CUDA runtime… ' + pct + '%', pct));
       emit('extract', 'Extracting CUDA runtime…');
-      extractZip(cudartZip, outDir);
+      extractArchive(cudartZip, outDir);
       try { fs.unlinkSync(cudartZip); } catch (_) { /* ignore */ }
     }
   }
@@ -303,7 +315,17 @@ async function ensureLlamaServer(opts) {
 const DEFAULT_MODEL_FILE = 'qwen2.5-coder-3b-instruct-q4_k_m.gguf';
 const DEFAULT_MODEL_URL =
   'https://huggingface.co/Qwen/Qwen2.5-Coder-3B-Instruct-GGUF/resolve/main/' + DEFAULT_MODEL_FILE;
-const DEFAULT_MODEL_SIZE_HINT = '≈1.9 GB';
+const DEFAULT_MODEL_SIZE_HINT = '≈2.1 GB';
+
+// Stock model file names shipped as the default by EARLIER versions. A config still naming
+// one of these is treated as "the default" so first run fetches the current model instead
+// of refusing with "pick a .gguf in Settings" — the user never chose that path, we did.
+// Only ever add names this app actually shipped: anything else is a model the user picked
+// deliberately, and silently replacing it with a 2 GB download is the very thing
+// isDefaultModel exists to prevent. Lower-case — isDefaultModel lower-cases before lookup.
+const LEGACY_MODEL_FILES = [
+  'mythos-nano-q4_k_m.gguf', // the default up to v0.2.0
+];
 
 function defaultModelDir() {
   return path.join(os.homedir(), 'GARM Code', 'models');
@@ -313,10 +335,12 @@ function defaultModelPath() {
   return path.join(defaultModelDir(), DEFAULT_MODEL_FILE);
 }
 
-// True when `modelPath` refers to the stock default model (by file name), so a missing
-// custom model is surfaced as an error instead of silently replaced by a 2 GB download.
+// True when `modelPath` refers to a stock model shipped by the app (current or legacy),
+// so a missing custom model is surfaced as an error instead of silently replaced by a
+// 2 GB download. Both sides are lower-cased — the current default is mixed-case.
 function isDefaultModel(modelPath) {
-  return path.basename(String(modelPath || '')).toLowerCase() === DEFAULT_MODEL_FILE;
+  const name = path.basename(String(modelPath || '')).toLowerCase();
+  return name === DEFAULT_MODEL_FILE.toLowerCase() || LEGACY_MODEL_FILES.includes(name);
 }
 
 // Download the default model if it is not already present. onProgress states mirror

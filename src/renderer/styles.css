@@ -294,6 +294,20 @@ body.window-maximized .win-restore-ico { display: block; }
   overflow-y: auto;
 }
 .answer-text { color: var(--text); font-family: var(--font); font-size: 12.5px; line-height: 1.55; letter-spacing: -0.006em; }
+/* Stage answers run the same markdown renderer as chat and carry .chat-md, inheriting the
+   whole markdown stylesheet below. Only the type scale differs — stage cards are narrower
+   and denser than the chat column, so headings and blocks are tightened up. */
+.answer-text.chat-md { font-size: 12.5px; line-height: 1.55; }
+.answer-text.chat-md > :first-child { margin-top: 0; }
+.answer-text.chat-md .md-h { margin: 10px 0 5px; }
+.answer-text.chat-md h1.md-h { font-size: 14px; }
+.answer-text.chat-md h2.md-h { font-size: 13.5px; }
+.answer-text.chat-md h3.md-h, .answer-text.chat-md h4.md-h { font-size: 12.5px; }
+.answer-text.chat-md p { margin: 0 0 7px; }
+.answer-text.chat-md ul, .answer-text.chat-md ol { margin: 0 0 7px; padding-left: 17px; }
+.answer-text.chat-md li { margin: 2px 0; }
+.answer-text.chat-md pre.cb { margin: 0 0 8px; padding: 9px 10px; }
+.answer-text.chat-md pre.cb code, .answer-text.chat-md code { font-size: 11.5px; }
 .toggle-think { font-size: 10.5px; color: var(--text-3); cursor: pointer; margin-bottom: 7px; display: inline-block; }
 .toggle-think:hover { color: var(--text); }
 @media (prefers-reduced-motion: reduce) {

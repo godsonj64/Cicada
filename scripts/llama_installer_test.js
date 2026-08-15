@@ -36,6 +36,26 @@ check('mac x64 -> x64 build', inst.pickAsset(ASSETS, 'darwin', 'x64').name === '
 check('linux x64 -> ubuntu build', inst.pickAsset(ASSETS, 'linux', 'x64').name === 'llama-b4000-bin-ubuntu-x64.zip');
 check('no asset -> null', inst.pickAsset([{ name: 'source.tar.gz' }], 'win32', 'x64') === null);
 
+// Current releases ship the macOS/Linux builds as .tar.gz (Windows stays .zip). Matching
+// only .zip picked nothing here and aborted the install with "no prebuilt binary is
+// available for this platform" — the regression this set guards.
+const TARBALLS = [
+  { name: 'llama-b10436-bin-macos-arm64.tar.gz', browser_download_url: 't1' },
+  { name: 'llama-b10436-bin-macos-x64.tar.gz', browser_download_url: 't2' },
+  { name: 'llama-b10436-bin-ubuntu-x64.tar.gz', browser_download_url: 't3' },
+  { name: 'llama-b10436-bin-ubuntu-vulkan-x64.tar.gz', browser_download_url: 't4' },
+  { name: 'llama-b10436-bin-ubuntu-openvino-2026.2.1-x64.tar.gz', browser_download_url: 't5' },
+  { name: 'llama-b10436-bin-win-cpu-x64.zip', browser_download_url: 't6' },
+  { name: 'llama-b10436-xcframework.zip', browser_download_url: 't7' },
+];
+
+check('mac arm64 -> arm64 tarball', inst.pickAsset(TARBALLS, 'darwin', 'arm64').name === 'llama-b10436-bin-macos-arm64.tar.gz');
+check('mac x64 -> x64 tarball', inst.pickAsset(TARBALLS, 'darwin', 'x64').name === 'llama-b10436-bin-macos-x64.tar.gz');
+check('linux x64 -> plain ubuntu tarball (not vulkan/openvino)', inst.pickAsset(TARBALLS, 'linux', 'x64').name === 'llama-b10436-bin-ubuntu-x64.tar.gz');
+check('win still prefers the zip build', inst.pickAsset(TARBALLS, 'win32', 'x64').name === 'llama-b10436-bin-win-cpu-x64.zip');
+check('mac metal backend uses the same tarball', inst.pickAsset(TARBALLS, 'darwin', 'arm64', 'metal').name === 'llama-b10436-bin-macos-arm64.tar.gz');
+check('xcframework is never chosen', inst.pickAsset([TARBALLS[6]], 'darwin', 'arm64') === null);
+
 // Newer naming where only a generic win-x64 zip is offered.
 check('win falls back to generic x64', inst.pickAsset([{ name: 'llama-bin-win-x64.zip', browser_download_url: 'g' }], 'win32', 'x64').name === 'llama-bin-win-x64.zip');
 
@@ -83,6 +103,27 @@ check('installedBinary reads an install dir', inst.installedBinary(dir) === foun
 check('installedBinary null when absent', inst.installedBinary(path.join(dir, 'nope')) === null);
 
 check('defaultInstallDir under GARM Code', /GARM Code[\\/]+llama\.cpp$/.test(inst.defaultInstallDir()), inst.defaultInstallDir());
+
+// --- Default model identification -------------------------------------------
+// isDefaultModel gates the automatic download: true means "we chose this path, replace
+// it", false means "the user picked this, tell them it's missing instead".
+check('default model is Qwen2.5-Coder 3B Q4_K_M', inst.DEFAULT_MODEL_FILE === 'qwen2.5-coder-3b-instruct-q4_k_m.gguf', inst.DEFAULT_MODEL_FILE);
+check('model URL points at the Qwen GGUF repo', inst.DEFAULT_MODEL_URL === 'https://huggingface.co/Qwen/Qwen2.5-Coder-3B-Instruct-GGUF/resolve/main/qwen2.5-coder-3b-instruct-q4_k_m.gguf', inst.DEFAULT_MODEL_URL);
+check('defaultModelPath sits under GARM Code/models', /GARM Code[\\/]+models[\\/]+qwen2\.5-coder-3b-instruct-q4_k_m\.gguf$/.test(inst.defaultModelPath()), inst.defaultModelPath());
+check('recognises the default by name', inst.isDefaultModel(inst.defaultModelPath()));
+check('recognises it case-insensitively', inst.isDefaultModel('/tmp/QWEN2.5-CODER-3B-INSTRUCT-Q4_K_M.GGUF'));
+check('recognises it in any directory', inst.isDefaultModel(path.join(os.homedir(), 'Downloads', 'qwen2.5-coder-3b-instruct-q4_k_m.gguf')));
+check('recognises the legacy mythos-nano default (so it migrates)', inst.isDefaultModel(path.join(os.homedir(), 'GARM Code', 'mythos-nano-Q4_K_M.gguf')));
+// A model the user chose themselves must never be swapped out from under them, however
+// plausible the name — only filenames this app actually shipped as a default migrate.
+check('a model the user picked is NOT treated as a stock default', inst.isDefaultModel('/tmp/LFM2.5-2.6B-Q4_K_M.gguf') === false);
+check('a custom model is NOT default', inst.isDefaultModel('/tmp/my-own-model.gguf') === false);
+check('empty path is NOT default', inst.isDefaultModel('') === false && inst.isDefaultModel(null) === false);
+
+// The config default must be the exact file the downloader writes, or first run downloads
+// the model and then still reports it missing.
+const cfg = require('../src/main/config');
+check('config default == download destination', cfg.DEFAULTS.modelPath === inst.defaultModelPath(), cfg.DEFAULTS.modelPath);
 
 fs.rmSync(dir, { recursive: true, force: true });
 console.log(failures ? `\n${failures} check(s) FAILED` : '\nAll llama-installer checks passed.');

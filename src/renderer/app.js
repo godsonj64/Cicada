@@ -49,7 +49,9 @@
         '      <div class="think-label">Reasoning</div>' +
         '      <div class="think-text"></div>' +
         '    </div>' +
-        '    <div class="answer-text"></div>' +
+        // .chat-md is the app's shared markdown-body stylesheet; stage answers run the
+        // same renderer (renderMarkdownInto) as chat, so they reuse it.
+        '    <div class="answer-text chat-md"></div>' +
         '  </div>' +
         '</div>';
       container.appendChild(card);
@@ -72,19 +74,49 @@
     });
   }
 
+  // Stage answers are markdown (headings, **bold**, bullet lists, fenced code), so they go
+  // through the same renderer the chat panel uses instead of being dumped as raw source
+  // with the markup visible. Re-rendering on every token would be wasteful at ~20ms/delta,
+  // so renders are coalesced; stage:done always performs a final, syntax-colorized pass.
+  function renderStageAnswer(r) {
+    if (r.mdTimer) return; // a render is already queued — this delta rides along with it
+    r.mdTimer = setTimeout(function () {
+      r.mdTimer = null;
+      renderMarkdownInto(r.answer, r.answerRaw || '', false);
+    }, 60);
+  }
+
+  // Open the reasoning panel the moment a stage actually produces reasoning. Called from
+  // the first thinking delta (and on done, for a stage whose reasoning arrived in one go),
+  // so models that never emit <think> simply never show the box.
+  function showThinking(r) {
+    if (r.hasThink) return;
+    r.hasThink = true;
+    r.toggle.classList.remove('hidden');
+    r.thinkBlock.classList.remove('hidden');
+    r.toggle.textContent = 'Hide reasoning';
+  }
+
   function setStage(id, state) {
     var r = stageEls[id]; if (!r) return;
     r.card.className = 'stage ' + state + (state === 'running' ? ' open' : '');
     r.state.textContent = state;
     if (state === 'running') {
       r.card.classList.add('open');
-      r.thinkBlock.classList.remove('hidden');
-      r.toggle.textContent = 'Hide reasoning';
+      // The reasoning panel is revealed by the first thinking delta, not by the stage
+      // starting: a plain instruct model (Qwen2.5-Coder) emits no <think> at all, and an
+      // always-empty "Reasoning" box reads as a stalled stage. showThinking() opens it.
+      r.hasThink = false;
+      r.thinkBlock.classList.add('hidden');
+      r.toggle.classList.add('hidden');
+      r.toggle.textContent = 'Show reasoning';
       r.card.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
     }
     if (state === 'done') {
       r.thinkBlock.classList.add('hidden');
       r.toggle.textContent = 'Show reasoning';
+      // Keep the toggle available after the fact only when there IS reasoning to re-open.
+      r.toggle.classList.toggle('hidden', !r.hasThink);
     }
   }
 
@@ -102,17 +134,26 @@
     garm.on('stage:start', function (p) { setStage(p.id, 'running'); });
     garm.on('stage:delta', function (p) {
       var r = stageEls[p.id]; if (!r) return;
-      if (p.kind === 'thinking') { r.think.textContent += p.text; r.think.scrollTop = r.think.scrollHeight; }
-      else { r.answer.textContent += p.text; }
+      if (p.kind === 'thinking') { showThinking(r); r.think.textContent += p.text; r.think.scrollTop = r.think.scrollHeight; }
+      else { r.answerRaw = (r.answerRaw || '') + p.text; renderStageAnswer(r); }
     });
     garm.on('stage:done', function (p) {
       var r = stageEls[p.id]; if (!r) return;
       r.think.textContent = p.thinking || r.think.textContent;
-      r.answer.textContent = p.answer || r.answer.textContent;
+      // Final pass: cancel any queued partial render and lay out the complete answer with
+      // code blocks syntax-colorized (the streaming passes skip colorize for speed).
+      if (r.mdTimer) { clearTimeout(r.mdTimer); r.mdTimer = null; }
+      r.answerRaw = p.answer || r.answerRaw || '';
+      renderMarkdownInto(r.answer, r.answerRaw, true);
+      // Reasoning that arrived in one piece rather than as deltas still counts, so the
+      // toggle stays available for re-opening it.
+      if (r.think.textContent) r.hasThink = true;
       setStage(p.id, 'done');
     });
     garm.on('stage:error', function (p) {
       var r = stageEls[p.id]; if (!r) return;
+      // Drop any queued markdown render so it cannot overwrite the error message.
+      if (r.mdTimer) { clearTimeout(r.mdTimer); r.mdTimer = null; }
       r.answer.textContent = p.message || 'Error';
       setStage(p.id, 'error');
     });
@@ -1445,6 +1486,13 @@
     if (!t) return { think: '', answer: '' };
     var closed = t.match(/<think>([\s\S]*?)<\/think>/i);
     if (closed) return { think: closed[1].trim(), answer: t.replace(/<think>[\s\S]*?<\/think>/i, '').trim() };
+    // Only a closing tag: a template that pre-opens <think> leaves the opener in the prompt,
+    // so everything before the tag is reasoning (see splitThinking in src/main/llm.js).
+    if (/<\/think>/i.test(t)) {
+      var parts = t.split(/<\/think>/i);
+      var tail = parts.pop();
+      return { think: parts.join('</think>').trim(), answer: tail.trim() };
+    }
     var open = t.match(/<think>([\s\S]*)$/i);
     if (open) return { think: open[1].trim(), answer: '' };
     return { think: '', answer: t.trim() };

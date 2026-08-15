@@ -25,7 +25,7 @@
 **Cicada** is an [Electron](https://www.electronjs.org/) desktop IDE that lets you describe a
 program in plain text and watch it become **runnable, executed Python** in the editor. Every
 stage of reasoning runs on your machine through a local GGUF model
-(`mythos-nano`, a Qwen2-architecture reasoning model) served by
+(`Qwen2.5-Coder 3B Instruct`, a small local coding model) served by
 [`llama-server`](https://github.com/ggerganov/llama.cpp) — **no API keys, no cloud, no data
 leaving your machine.**
 
@@ -98,9 +98,10 @@ User prompt
    -> Run & Render    (execute; stream stdout/stderr; surface plots/images)
 ```
 
-Each stage is a focused call to the local model. Because `mythos-nano` is a reasoning model, its
-`<think>` reasoning is separated from the answer and shown in a collapsible panel per stage; the
-final code is extracted from the answer's fenced block.
+Each stage is a focused call to the local model. When the model emits `<think>` reasoning — as
+reasoning models do; `Qwen2.5-Coder` generally answers directly — it is separated from the answer
+and shown in a collapsible panel per stage; the final code is extracted from the answer's fenced
+block.
 
 ## Features
 
@@ -176,7 +177,7 @@ final code is extracted from the answer's fenced block.
 | Terminal | [xterm.js](https://xtermjs.org/) (`@xterm/xterm` + fit addon) |
 | Math rendering | [KaTeX](https://katex.org/) |
 | Local inference | [llama.cpp](https://github.com/ggerganov/llama.cpp) `llama-server` |
-| Model | `mythos-nano` (Qwen2-architecture reasoning model, GGUF) |
+| Model | `Qwen2.5-Coder 3B Instruct` (Q4_K_M, GGUF) |
 | Runtime / execution | Python 3 (compile, run, matplotlib harness, env detection) |
 
 ## Requirements
@@ -188,8 +189,9 @@ final code is extracted from the answer's fenced block.
   (macOS: `brew install llama.cpp`), set it in Settings, or override with
   `GARM_LLAMA_SERVER=/path/to/llama-server`.
 - A `.gguf` model. **On first run Cicada downloads the default model
-  (Qwen2.5-Coder 3B Instruct, ~1.9 GB) automatically** if none is present — so a fresh
-  install needs zero manual setup. To use your own model, pick any `.gguf` in Settings.
+  ([`qwen2.5-coder-3b-instruct-q4_k_m.gguf`](https://huggingface.co/Qwen/Qwen2.5-Coder-3B-Instruct-GGUF),
+  ~2.1 GB) automatically** if none is present — so a fresh install needs zero manual setup.
+  To use your own model, pick any `.gguf` in Settings.
 - Python 3 on your `PATH` (used for compile + run; `python` on Windows, `python3` elsewhere).
 - Node.js 18+ (for Electron).
 - `git` on your `PATH` for the GitHub integration (plus a GitHub personal access token

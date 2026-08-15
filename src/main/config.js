@@ -7,11 +7,12 @@ const path = require('path');
 // Resolve the user's home directory in a portable way.
 const HOME = os.homedir();
 
-// Default GGUF model the app ships with. Qwen2.5-Coder 3B (instruct, Q4_K_M, ~2 GB) is
-// the strongest small local coding model — fast and low-VRAM while still capable — so it
-// loads quickly on modest machines. The app looks for it in the user's Downloads folder.
-// The user can change this in Settings.
-const DEFAULT_MODEL = path.join(HOME, 'Downloads', 'qwen2.5-coder-3b-instruct-q4_k_m.gguf');
+// Default GGUF model the app ships with: Qwen2.5-Coder 3B (instruct, Q4_K_M, ~2.1 GB) — a
+// strong small local coding model, fast and low-VRAM enough to load on modest machines.
+// The name and the download live in llama-installer.js, and the default points at the very
+// location that downloads to, so a first run finds the file it just fetched. The user can
+// change this in Settings.
+const DEFAULT_MODEL = require('./llama-installer').defaultModelPath();
 
 const DEFAULTS = {
   // Inference backend: 'local' (llama-server + a GGUF on this machine) or 'deepseek'

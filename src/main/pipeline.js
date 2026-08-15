@@ -12,6 +12,19 @@ const projects = require('./projects');
 
 const SYS = 'You are Cicada, an expert Python engineer working inside an agentic IDE. Be precise, correct, and concise.';
 
+// May the answer be streamed to the UI yet? Answer deltas must not be emitted while the
+// model might still be inside a <think> block, or reasoning would leak into the answer
+// pane. Gating on the CLOSING tag alone, though, meant a model that never opens one — any
+// plain instruct model, Qwen2.5-Coder included — streamed nothing at all: no reasoning to
+// show, and the answer suppressed until the stage finished. Reasoning models are unaffected.
+function answerStreamable(full) {
+  if (/<\/think>/i.test(full)) return true;   // thought closed — the rest is the answer
+  if (/<think>/i.test(full)) return false;    // still inside the thought
+  // No opening tag, but the first bytes could still be growing into one ("<", "<th", …),
+  // so hold until the text can no longer become "<think>".
+  return !'<think>'.startsWith(full.trimStart().slice(0, 7).toLowerCase());
+}
+
 // Code-producing stages (generate / apply / fix / inpaint) run AFTER the Evaluate and
 // Design stages have already planned the solution, so the model must NOT re-derive the
 // whole approach inside a long <think> block — that is exactly what made "Generate Code"
@@ -416,7 +429,7 @@ class Pipeline {
         this.emit('stage:delta', { id, kind: 'thinking', text: tShown.slice(tLen) });
         tLen = tShown.length;
       }
-      if (closed && answer.length > aLen) {
+      if (answerStreamable(full) && answer.length > aLen) {
         this.emit('stage:delta', { id, kind: 'answer', text: answer.slice(aLen) });
         aLen = answer.length;
       }
@@ -987,7 +1000,7 @@ class Pipeline {
       const closed = /<\/think>/i.test(full);
       const tShown = closed ? thinking : thinking.slice(0, Math.max(0, thinking.length - 12));
       if (tShown.length > tLen) { this.emit('stage:delta', { id, kind: 'thinking', text: tShown.slice(tLen) }); tLen = tShown.length; }
-      if (closed && answer.length > aLen) { this.emit('stage:delta', { id, kind: 'answer', text: answer.slice(aLen) }); aLen = answer.length; }
+      if (answerStreamable(full) && answer.length > aLen) { this.emit('stage:delta', { id, kind: 'answer', text: answer.slice(aLen) }); aLen = answer.length; }
       if (livePreview) {
         const snippet = extractCodeStreaming(answerStream(full));
         const now = Date.now();

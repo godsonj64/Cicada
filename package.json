@@ -1,7 +1,7 @@
 {
   "name": "garm-code",
   "productName": "Cicada",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "description": "Cicada — an agentic Python IDE powered by a local GGUF model (Qwen2.5-Coder 3B).",
   "main": "src/main/main.js",
   "author": "Cicada",
@@ -11,6 +11,7 @@
     "check": "node scripts/check.js",
     "icon": "electron scripts/make-icon.js",
     "dist:win": "electron scripts/make-icon.js && electron-builder --win",
+    "dist:mac": "electron scripts/make-icon.js && electron-builder --mac",
     "dist": "electron-builder"
   },
   "dependencies": {
@@ -32,12 +33,34 @@
       "buildResources": "build"
     },
     "asar": true,
+    "afterPack": "scripts/after-pack-sign.js",
     "files": [
       "src/**/*",
       "assets/cicada-logo.svg",
       "assets/cicada-onboarding.png",
       "package.json"
     ],
+    "mac": {
+      "icon": "build/icon.png",
+      "category": "public.app-category.developer-tools",
+      "target": [
+        {
+          "target": "dmg",
+          "arch": [
+            "arm64"
+          ]
+        },
+        {
+          "target": "zip",
+          "arch": [
+            "arm64"
+          ]
+        }
+      ]
+    },
+    "dmg": {
+      "artifactName": "${productName}-${version}-${arch}.${ext}"
+    },
     "win": {
       "icon": "build/icon.png",
       "target": [

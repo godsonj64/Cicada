@@ -1,8 +1,10 @@
 'use strict';
 
 // Thin client over llama-server's OpenAI-compatible /v1/chat/completions endpoint.
-// Handles SSE streaming and exposes helpers tailored to a Qwen2-style reasoning
-// model that emits <think>...</think> blocks before its answer.
+// Handles SSE streaming and exposes helpers tailored to a reasoning model that emits
+// <think>...</think> blocks before its answer. The tag may arrive fully formed, split into
+// a separate reasoning_content field (hosted providers), or with the opening tag supplied
+// by the chat template rather than the model — splitThinking handles all three.
 
 /**
  * Stream a chat completion. Calls onDelta(textChunk) for each token delta.
@@ -159,6 +161,16 @@ function splitThinking(text) {
     const thinking = closed[1].trim();
     const answer = text.replace(/<think>[\s\S]*?<\/think>/i, '').trim();
     return { thinking, answer };
+  }
+  // Only a CLOSING tag: templates for always-reasoning models (LFM2.5, R1-style) put the
+  // opening <think> in the PROMPT, so the completion starts already inside the thought and
+  // just closes it. Everything up to the tag is thinking — without this the entire chain of
+  // thought, closing tag and all, is handed back as the answer. Splits on the last </think>
+  // so this agrees with answerStream about where the answer begins.
+  if (/<\/think>/i.test(text)) {
+    const parts = text.split(/<\/think>/i);
+    const answer = parts.pop();
+    return { thinking: parts.join('</think>').trim(), answer: answer.trim() };
   }
   // Unclosed <think> (model ran out of tokens mid-thought): treat all after the tag as thinking.
   const open = text.match(/<think>([\s\S]*)$/i);
