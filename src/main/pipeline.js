@@ -258,8 +258,22 @@ class Pipeline {
   // characters (oldest-first, truncating individual files) so a large project still fits
   // the context window. Mirrors the format the model is asked to emit, so round-trips read
   // naturally to a small model.
+  // How much of the project to show the model, in characters. Fixed at 16k this did not
+  // scale: on a large context the model still saw a truncated project, and on repo-mode
+  // refine the dump plus the required whole-file output left too little room to answer.
+  // Cap it at ~40% of the window so the majority stays available for the reply, but never
+  // go below the historical 16k so small contexts behave exactly as before.
+  _repoBudgetChars() {
+    const ctx = this.config.contextSize || 8192;
+    // At the default 8k window the old fixed 16k dump was ~56% of the context on its own,
+    // so a repo-mode change had under half the window left to write COMPLETE files back —
+    // which is what made "Apply Changes was cut off" so easy to hit. Hold the dump to ~40%
+    // of the window instead, with a small floor so tiny contexts still see something.
+    return Math.max(6000, Math.round(ctx * 3.5 * 0.4));
+  }
+
   _repoContext(files, budget) {
-    budget = budget || 16000;
+    budget = budget || this._repoBudgetChars();
     let used = 0;
     const parts = [];
     for (const f of files) {
@@ -405,7 +419,30 @@ class Pipeline {
     const promptTokens = Math.ceil(chars / 3.5);
     const room = this.config.contextSize - promptTokens - 256; // leave a small safety margin
     const ceiling = this.config.maxTokens || this.config.contextSize;
-    return Math.max(1024, Math.min(room, ceiling, this.config.contextSize));
+    const budget = Math.max(1024, Math.min(room, ceiling, this.config.contextSize));
+    // Kept so a truncation can be explained with real numbers instead of the bare advice
+    // to "raise Context size", which tells the user nothing about how much is needed.
+    this.lastBudget = { promptTokens, room, budget, contextSize: this.config.contextSize };
+    return budget;
+  }
+
+  // Why generation ran out of room, in concrete terms. A prompt that fills the context
+  // leaves nothing for the answer, and no amount of retrying changes that — the user needs
+  // to know which side of the ledger is the problem.
+  _budgetHelp() {
+    const b = this.lastBudget;
+    if (!b) return 'Raise Context size in Settings, or narrow the request.';
+    const n = (v) => Math.max(0, v).toLocaleString();
+    const parts = [
+      `The prompt used roughly ${n(b.promptTokens)} of the ${n(b.contextSize)}-token context, leaving about ${n(b.room)} for the answer.`,
+    ];
+    if (b.room < b.budget) {
+      // The floor asked for more than actually remained, so llama-server had to shift the
+      // context window and drop the head of the prompt.
+      parts.push(`That is less than the ${n(b.budget)}-token minimum, so the context window was shifted and part of the prompt was dropped.`);
+    }
+    parts.push('Raise Context size in Settings (it now takes effect immediately, without restarting the app), or narrow the request.');
+    return parts.join(' ');
   }
 
   // Run a single LLM stage with streamed thinking/answer routing.
@@ -811,7 +848,7 @@ class Pipeline {
       const code = gen.out;
       if (!code) {
         throw new Error(gen.res.finishReason === 'length'
-          ? 'Generate stage was cut off before completing the code block (token budget exhausted). Raise Context size in Settings or narrow the request.'
+          ? 'Generate stage was cut off before completing the code block. ' + this._budgetHelp()
           : 'The model did not return usable code after two attempts. Re-run the request, rephrase it more concretely, or switch to a stronger model in Settings.');
       }
       this._writeCode(code);
@@ -835,7 +872,7 @@ class Pipeline {
     const files = gen.out;
     if (!files.length) {
       throw new Error(gen.res.finishReason === 'length'
-        ? 'Generate stage was cut off before completing the project (token budget exhausted). Raise Context size in Settings or narrow the request.'
+        ? 'Generate stage was cut off before completing the project. ' + this._budgetHelp()
         : 'The model did not return any usable file blocks after two attempts. Re-run, rephrase the request, or switch to a stronger model in Settings.');
     }
     this._writeFiles(files, pickEntry(files));
@@ -868,7 +905,7 @@ class Pipeline {
       const code = apply.out;
       if (!code) {
         throw new Error(apply.res.finishReason === 'length'
-          ? 'Apply Changes was cut off before completing the program (token budget exhausted). Raise Context size in Settings or narrow the change.'
+          ? 'Apply Changes was cut off before completing the program. ' + this._budgetHelp()
           : 'The model did not return updated code after two attempts. Your code is unchanged — re-run or rephrase the change.');
       }
       // The model sometimes returns a fragment instead of the full updated program; don't
@@ -921,7 +958,7 @@ class Pipeline {
       const updates = apply.out;
       if (!updates.length) {
         throw new Error(apply.res.finishReason === 'length'
-          ? 'Apply Changes was cut off before completing the project (token budget exhausted). Raise Context size in Settings or narrow the change.'
+          ? 'Apply Changes was cut off before completing the project. ' + this._budgetHelp()
           : 'The model did not return updated files after two attempts. Your project is unchanged — re-run or rephrase the change.');
       }
       this._writeFiles(this._mergeFiles(this.files, updates), this.entry);
@@ -972,7 +1009,7 @@ class Pipeline {
       }
       if (!snippet) {
         throw new Error(regionRes.finishReason === 'length'
-          ? 'Rewrite was cut off before completing the replacement (token budget exhausted). Raise Context size in Settings or select a smaller region.'
+          ? 'Rewrite was cut off before completing the replacement. ' + this._budgetHelp()
           : 'The model did not return a replacement code block after two attempts. Your code is unchanged — try again or rephrase the instruction.');
       }
 

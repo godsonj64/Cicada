@@ -34,6 +34,10 @@ if (process.env.GARM_USER_DATA) app.setPath('userData', path.resolve(process.env
 // recompute, so no persistence; cleared on project switch and dataset re-analysis.
 const insightsCache = new Map();
 
+// Settings that llama-server only reads when it is spawned — changing any of them
+// requires a restart for the change to take effect.
+const SERVER_FIELDS = ['contextSize', 'gpuLayers', 'modelPath', 'serverPort', 'llamaServerPath'];
+
 let mainWindow = null;
 let config = configMod.load();
 let llama = null;
@@ -530,6 +534,7 @@ function registerIpc() {
   ipcMain.handle('config:set', (_e, partial) => {
     const prevPython = config.pythonPath;
     const prevProvider = config.provider;
+    const prev = SERVER_FIELDS.map((k) => config[k]);
     config = configMod.save(partial || {});
     if (config.pythonPath !== prevPython) {
       if (terminal) terminal.setPython(config.pythonPath);
@@ -539,6 +544,23 @@ function registerIpc() {
     // when going to the hosted DeepSeek API.
     if (config.provider !== prevProvider) {
       if (config.provider === 'local') startLocalLlama(); else llama.stop();
+    } else if (config.provider === 'local' && llama) {
+      // These are passed to llama-server on the command line (-c, -ngl, -m, --port), so
+      // they only take effect at spawn time. Saving them without restarting left the
+      // server running with the OLD values while the rest of the app believed the new
+      // ones — most visibly, raising Context size did nothing at all and generation kept
+      // being cut off with "token budget exhausted. Raise Context size in Settings."
+      const changed = SERVER_FIELDS.filter((k, i) => config[k] !== prev[i]);
+      if (changed.length) {
+        llama.config = config;
+        send('llama:log', { line: `[cicada] ${changed.join(', ')} changed — restarting llama-server` });
+        llama.restart(config).catch((e) => {
+          if (llama) { llama.status = 'error'; llama.lastError = 'Restart failed: ' + e.message; }
+          pushStatus();
+        });
+      } else {
+        llama.config = config; // keep the server's view in step even when no respawn is needed
+      }
     }
     pushStatus(); // reflect provider / key / model changes in the status pill
     return config;
