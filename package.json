@@ -1,8 +1,8 @@
 {
   "name": "garm-code",
   "productName": "Cicada",
-  "version": "0.8.0",
-  "description": "Cicada — an agentic Python IDE powered by a local GGUF model (Qwen2.5-Coder 3B).",
+  "version": "0.8.1",
+  "description": "Cicada \u2014 an agentic Python IDE powered by a local GGUF model (Qwen2.5-Coder 3B).",
   "main": "src/main/main.js",
   "author": "Cicada",
   "license": "MIT",
@@ -10,16 +10,19 @@
     "start": "electron .",
     "check": "node scripts/check.js",
     "icon": "electron scripts/make-icon.js",
-    "dist:win": "electron scripts/make-icon.js && electron-builder --win",
-    "dist:mac": "electron scripts/make-icon.js && electron-builder --mac",
-    "dist": "electron-builder"
+    "dist:win": "electron scripts/make-icon.js && electron-builder --win && npm run verify:bundle",
+    "dist:mac": "electron scripts/make-icon.js && electron-builder --mac && npm run verify:bundle",
+    "dist": "electron-builder",
+    "verify:bundle": "node scripts/verify_bundle.js"
   },
   "dependencies": {
+    "@langchain/core": "^1.2.9",
     "@langchain/langgraph": "^1.4.14",
     "@xterm/addon-fit": "^0.10.0",
     "@xterm/xterm": "^5.5.0",
     "katex": "^0.16.11",
-    "monaco-editor": "^0.52.2"
+    "monaco-editor": "^0.52.2",
+    "zod": "^4.5.4"
   },
   "devDependencies": {
     "electron": "^33.2.1",
