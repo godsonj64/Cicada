@@ -1,7 +1,7 @@
 {
   "name": "garm-code",
   "productName": "Cicada",
-  "version": "0.7.1",
+  "version": "0.8.0",
   "description": "Cicada — an agentic Python IDE powered by a local GGUF model (Qwen2.5-Coder 3B).",
   "main": "src/main/main.js",
   "author": "Cicada",
@@ -15,6 +15,7 @@
     "dist": "electron-builder"
   },
   "dependencies": {
+    "@langchain/langgraph": "^1.4.14",
     "@xterm/addon-fit": "^0.10.0",
     "@xterm/xterm": "^5.5.0",
     "katex": "^0.16.11",

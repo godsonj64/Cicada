@@ -9,6 +9,8 @@ const {
 const python = require('./python');
 const { spliceRegion, regionText } = require('./splice');
 const projects = require('./projects');
+const { buildFinalizeGraph } = require('./agent-graph');
+const { ProblemLedger } = require('./agent-memory');
 
 const SYS = 'You are Cicada, an expert Python engineer working inside an agentic IDE. Be precise, correct, and concise.';
 
@@ -92,7 +94,7 @@ const INPAINT_STAGES = [
 ];
 
 class Pipeline {
-  constructor({ config, baseUrl, emit, runFile, memory, env, datasets, apiKey, model }) {
+  constructor({ config, baseUrl, emit, runFile, memory, env, datasets, apiKey, model, ledger }) {
     this.config = config;
     this.baseUrl = baseUrl;
     // For hosted providers (DeepSeek): bearer key + explicit model id. null for local.
@@ -103,6 +105,9 @@ class Pipeline {
     this.memory = memory || null; // ContextMemory | null (optional; tests omit it)
     this.env = env || null; // detected environment { python, libs:[...] } | null
     this.datasets = datasets || null; // prebuilt data-context block (string) | null
+    // Problem-aware repair memory: which failures have been seen, and which fixes were
+    // already tried against them. Injected for tests; otherwise per-project on disk.
+    this.ledger = ledger || (config.workspaceDir ? new ProblemLedger(config.workspaceDir) : null);
     this.abort = null;
     this.running = false;
     this.code = '';
@@ -144,9 +149,19 @@ class Pipeline {
   // The persistent context-memory block to prepend to a stage prompt (or '' when
   // there is nothing remembered yet). Emits a memory:update so the UI panel stays live.
   _memoryBlock() {
-    if (!this.memory) return '';
-    const block = this.memory.render();
-    return block ? block + '\n\n' : '';
+    const parts = [];
+    if (this.memory) {
+      const block = this.memory.render();
+      if (block) parts.push(block);
+    }
+    // Unresolved failures from earlier runs. Carrying these into every stage prompt is what
+    // lets the agent plan around a problem it has already hit — rather than rediscovering
+    // the same dead end each session and repeating fixes that are known not to work.
+    if (this.ledger) {
+      const known = this.ledger.renderKnownIssues(5);
+      if (known) parts.push(known);
+    }
+    return parts.length ? parts.join('\n\n') + '\n\n' : '';
   }
 
   // The uploaded-data context block (schemas + load hints for the project's CSV/Excel/JSON
@@ -519,104 +534,161 @@ class Pipeline {
     }
   }
 
-  // Shared tail: review -> fix & compile loop -> run & render -> done.
+  // One repair turn. `history` is the ledger's account of what has ALREADY been tried
+  // against this exact failure; including it is the difference between a problem-aware
+  // repair and a blind retry that re-proposes a fix which just failed.
+  async _askFix({ request, code, feedback, history }) {
+    const hist = history ? `\n\n${history}` : '';
+    const prompt = `Fix the Python program. Output EXACTLY ONE \`\`\`python code block with the complete corrected program. No prose outside the code block. ${this._libNote()}\n\nREQUEST:\n${request}\n\nCURRENT CODE:\n\`\`\`python\n${code}\n\`\`\`\n\n${feedback}${hist}\n\n${BRIEF_THINK}`;
+    const text = await this._streamCode([{ role: 'system', content: SYS }, { role: 'user', content: prompt }]);
+    return extractCode(splitThinking(text).answer) || extractCode(text) || null;
+  }
+
+  // Shared tail: review -> apply review -> compile repair -> run & render -> done.
+  //
+  // The two repair loops are LangGraph subgraphs (see src/main/agent-graph.js) rather than
+  // bare while-loops. Expressed as a graph they carry explicit state, so each repair knows
+  // which failure it is working, how many times that exact failure has already recurred,
+  // and which fixes were tried against it — and the loop concedes when the same failure
+  // survives repeated attempts instead of spending the whole budget on a dead end.
   async _finalize(request, code) {
-    const reviewRes = await this._stage(
-      'review', 'Review',
-      `Review this Python code for correctness bugs, runtime errors, and missing edge cases. Output a short numbered list of concrete issues. If it is correct and complete, output exactly: NO ISSUES. Do NOT rewrite the code.\n\nREQUEST:\n${request}\n\nCODE:\n\`\`\`python\n${code}\n\`\`\``,
-      { maxTokens: 1024 }
-    );
-    const reviewText = reviewRes.answer.trim();
-    const hasIssues = reviewText.length > 0 && !/no issues/i.test(reviewText);
+    const opened = new Set();
+    const open = (id, name) => { if (!opened.has(id)) { opened.add(id); this.emit('stage:start', { id, name }); } };
+    const note = (id, name) => (text) => { open(id, name); this.emit('stage:delta', { id, kind: 'answer', text }); };
 
-    this.emit('stage:start', { id: 'fix', name: 'Fix & Compile' });
-    let compileResult = await python.compileCheck({ pythonPath: this.config.pythonPath, file: this.filePath });
-    this.emit('stage:delta', { id: 'fix', kind: 'answer', text: `Initial compile: ${compileResult.ok ? 'OK' : 'FAILED'}\n` });
+    let runResult = { code: null, stderr: '', images: [] };
+    let missing = null;
 
-    const needFirstFix = hasIssues || !compileResult.ok;
-    const maxIter = this.config.maxFixIterations;
-    let iter = 0;
-    while ((needFirstFix && iter === 0) || (!compileResult.ok && iter < maxIter)) {
-      const feedback = !compileResult.ok
-        ? `The code fails to compile. Fix the error.\n\nCOMPILER OUTPUT:\n${compileResult.output}`
-        : `Apply this review feedback.\n\nREVIEW:\n${reviewRes.answer}`;
-      this.emit('stage:delta', { id: 'fix', kind: 'answer', text: `\nFix iteration ${iter + 1}...\n` });
+    const graph = buildFinalizeGraph({
+      aborted: () => this._aborted(),
 
-      const fixPrompt = `Fix the Python program. Output EXACTLY ONE \`\`\`python code block with the complete corrected program. No prose outside the code block. ${this._libNote()}\n\nREQUEST:\n${request}\n\nCURRENT CODE:\n\`\`\`python\n${code}\n\`\`\`\n\n${feedback}\n\n${BRIEF_THINK}`;
-      const fixText = await this._streamCode(
-        [{ role: 'system', content: SYS }, { role: 'user', content: fixPrompt }]
-      );
-      const fixed = extractCode(splitThinking(fixText).answer) || extractCode(fixText);
-      if (fixed && this._isDegenerateRewrite(code, fixed)) {
-        this.emit('stage:delta', { id: 'fix', kind: 'answer', text: 'Fix collapsed the program into a fragment — discarding it and keeping the current code.\n' });
-        break;
-      }
-      if (fixed) { code = fixed; this._writeCode(code); }
-      compileResult = await python.compileCheck({ pythonPath: this.config.pythonPath, file: this.filePath });
-      this.emit('stage:delta', { id: 'fix', kind: 'answer', text: `Compile after fix ${iter + 1}: ${compileResult.ok ? 'OK' : 'FAILED'}\n` });
-      iter += 1;
-    }
-    this.emit('stage:done', {
-      id: 'fix', thinking: '',
-      answer: compileResult.ok
-        ? `Code compiles cleanly${iter ? ` after ${iter} fix iteration(s)` : ''}.`
-        : `Code still has syntax errors after ${iter} attempt(s):\n${compileResult.output}`,
+      review: async (req, c) => {
+        const res = await this._stage(
+          'review', 'Review',
+          `Review this Python code for correctness bugs, runtime errors, and missing edge cases. Output a short numbered list of concrete issues. If it is correct and complete, output exactly: NO ISSUES. Do NOT rewrite the code.\n\nREQUEST:\n${req}\n\nCODE:\n\`\`\`python\n${c}\n\`\`\``,
+          { maxTokens: 1024 }
+        );
+        const text = res.answer.trim();
+        return { text, hasIssues: text.length > 0 && !/no issues/i.test(text) };
+      },
+
+      applyReview: async (req, c, review) => {
+        open('fix', 'Fix & Compile');
+        this.emit('stage:delta', { id: 'fix', kind: 'answer', text: 'Applying review feedback…\n' });
+        const fixed = await this._askFix({ request: req, code: c, feedback: `Apply this review feedback.\n\nREVIEW:\n${review}` });
+        if (!fixed) return null;
+        if (this._isDegenerateRewrite(c, fixed)) {
+          this.emit('stage:delta', { id: 'fix', kind: 'answer', text: 'Review fix collapsed the program into a fragment — keeping the current code.\n' });
+          return null;
+        }
+        this._writeCode(fixed);
+        return fixed;
+      },
+
+      compileDriver: {
+        phase: 'compile',
+        maxIter: this.config.maxFixIterations,
+        ledger: this.ledger,
+        aborted: () => this._aborted(),
+        note: note('fix', 'Fix & Compile'),
+        check: async () => {
+          open('fix', 'Fix & Compile');
+          const r = await python.compileCheck({ pythonPath: this.config.pythonPath, file: this.filePath });
+          this.emit('stage:delta', { id: 'fix', kind: 'answer', text: `Compile: ${r.ok ? 'OK' : 'FAILED'}\n` });
+          return { ok: r.ok, output: r.output };
+        },
+        repair: async ({ code: c, output, history }) => {
+          const fixed = await this._askFix({
+            request, code: c, history,
+            feedback: `The code fails to compile. Fix the error.\n\nCOMPILER OUTPUT:\n${output}`,
+          });
+          if (!fixed) return null;
+          if (this._isDegenerateRewrite(c, fixed)) {
+            this.emit('stage:delta', { id: 'fix', kind: 'answer', text: 'Fix collapsed the program into a fragment — discarding it and keeping the current code.\n' });
+            return null;
+          }
+          this._writeCode(fixed);
+          return fixed;
+        },
+      },
+
+      onCompileEnd: async (st) => {
+        open('fix', 'Fix & Compile');
+        const stuck = st.compileStop === 'stuck' ? ' The same error kept recurring, so repair stopped early.' : '';
+        this.emit('stage:done', {
+          id: 'fix', thinking: '',
+          answer: st.compileOk
+            ? `Code compiles cleanly${st.compileIters ? ` after ${st.compileIters} fix iteration(s)` : ''}.`
+            : `Code still has syntax errors after ${st.compileIters} attempt(s).${stuck}\n${st.compileOut}`,
+        });
+      },
+
+      onRunStart: async () => open('run', 'Run & Render'),
+
+      runDriver: {
+        phase: 'runtime',
+        maxIter: this.config.maxFixIterations,
+        ledger: this.ledger,
+        aborted: () => this._aborted(),
+        note: note('run', 'Run & Render'),
+        check: async () => {
+          const r = await this.runFile(this.filePath, { timeoutMs: this.config.runTimeoutMs || 600000 });
+          runResult = r;
+          // A missing library is not a code bug — surface it with the pip command instead
+          // of burning repair iterations rewriting correct code.
+          const miss = python.missingModule(r.stderr);
+          if (miss && !missing) { missing = miss; this._reportMissing('run', miss); }
+          const crashed = r.code !== 0 && r.stderr && /Traceback|Error:|Exception/.test(r.stderr);
+          return { ok: !crashed, output: r.stderr || '', exit: r.code, missing: miss || null };
+        },
+        repair: async ({ code: c, output, history }) => {
+          const fixed = await this._askFix({
+            request, code: c, history,
+            feedback: `The program is syntactically valid but crashes at runtime. Diagnose the traceback and fix the ROOT CAUSE.\n\nRUNTIME ERROR (traceback):\n${String(output).slice(-1600)}`,
+          });
+          if (!fixed) return null;
+          // Guard against the model collapsing the program into a stub: keep the last
+          // working version rather than letting each repair shrink it into garbage.
+          if (this._isDegenerateRewrite(c, fixed)) {
+            this.emit('stage:delta', { id: 'run', kind: 'answer', text: 'Repair collapsed the program into a fragment — keeping the last complete version and stopping.\n' });
+            return null;
+          }
+          this._writeCode(fixed);
+          const recompile = await python.compileCheck({ pythonPath: this.config.pythonPath, file: this.filePath });
+          if (!recompile.ok) {
+            this.emit('stage:delta', { id: 'run', kind: 'answer', text: 'Repair did not compile; stopping.\n' });
+            return null;
+          }
+          return fixed;
+        },
+      },
+
+      onRunEnd: async (st) => {
+        const imgN = runResult.images && runResult.images.length ? ` Rendered ${runResult.images.length} image(s).` : '';
+        const repaired = st.runIters ? ` after ${st.runIters} runtime repair(s)` : '';
+        const stuck = st.runStop === 'stuck' ? ' The same error kept recurring, so repair stopped early.' : '';
+        this.emit('stage:done', {
+          id: 'run', thinking: '',
+          answer: runResult.code === 0
+            ? `Ran successfully${repaired} (exit 0).${imgN}`
+            : `Process exited with code ${runResult.code}${repaired}.${imgN}${stuck}`,
+        });
+      },
     });
 
-    this.emit('stage:start', { id: 'run', name: 'Run & Render' });
-    let runResult = await this.runFile(this.filePath, { timeoutMs: this.config.runTimeoutMs || 600000 });
-    if (this._aborted()) return this._stoppedDone(compileResult.ok);
-
-    // A missing library is not a code bug — surface it (with the pip command) instead
-    // of burning fix iterations rewriting correct code.
-    let missing = python.missingModule(runResult.stderr);
-    if (missing) this._reportMissing('run', missing);
-
-    // Self-heal runtime errors: compiling cleanly does not mean it runs. If the
-    // program crashed with a traceback, feed it back into a fix and re-run.
-    let rIter = 0;
-    while (
-      !this._aborted() && !missing && runResult.code !== 0 && rIter < this.config.maxFixIterations &&
-      runResult.stderr && /Traceback|Error:|Exception/.test(runResult.stderr)
-    ) {
-      this.emit('stage:delta', { id: 'run', kind: 'answer', text: `\nRuntime error detected — repairing (attempt ${rIter + 1})...\n` });
-      const fixPrompt = `The program is syntactically valid but crashes at runtime. Diagnose the traceback and fix the root cause. Output EXACTLY ONE \`\`\`python code block with the complete corrected program. No prose outside the code block. ${this._libNote()}\n\nREQUEST:\n${request}\n\nCURRENT CODE:\n\`\`\`python\n${this.code}\n\`\`\`\n\nRUNTIME ERROR (traceback):\n${runResult.stderr.slice(-1600)}\n\n${BRIEF_THINK}`;
-      const fixText = await this._streamCode([{ role: 'system', content: SYS }, { role: 'user', content: fixPrompt }]);
-      const fixed = extractCode(splitThinking(fixText).answer) || extractCode(fixText);
-      if (!fixed) break;
-      // Guard against the model collapsing the whole program into a stub: keep the last
-      // working version rather than letting each "repair" shrink it further into garbage.
-      if (this._isDegenerateRewrite(this.code, fixed)) {
-        this.emit('stage:delta', { id: 'run', kind: 'answer', text: 'Repair collapsed the program into a fragment — keeping the last complete version and stopping.\n' });
-        break;
-      }
-      this._writeCode(fixed);
-      const recompile = await python.compileCheck({ pythonPath: this.config.pythonPath, file: this.filePath });
-      if (!recompile.ok) { this.emit('stage:delta', { id: 'run', kind: 'answer', text: 'Repair did not compile; stopping.\n' }); break; }
-      runResult = await this.runFile(this.filePath, { timeoutMs: this.config.runTimeoutMs || 600000 });
-      missing = python.missingModule(runResult.stderr);
-      if (missing) { this._reportMissing('run', missing); break; }
-      rIter += 1;
-    }
-
-    const imgN = runResult.images && runResult.images.length ? ` Rendered ${runResult.images.length} image(s).` : '';
-    const repaired = rIter ? ` after ${rIter} runtime repair(s)` : '';
-    this.emit('stage:done', {
-      id: 'run', thinking: '',
-      answer: runResult.code === 0
-        ? `Ran successfully${repaired} (exit 0).${imgN}`
-        : `Process exited with code ${runResult.code}${repaired}.${imgN}`,
-    });
+    const final = await graph.invoke({ request, code }, { recursionLimit: 100 });
+    this.code = final.code || this.code;
+    if (this._aborted()) return this._stoppedDone(final.compileOk);
 
     // Remember the outcome so later requests know whether the program currently works.
     const errLine = runResult.code !== 0 && runResult.stderr
       ? ` — ${runResult.stderr.trim().split('\n').pop()}`
       : '';
     this._remember('run', runResult.code === 0
-      ? `Program runs cleanly (exit 0).${imgN}`
+      ? `Program runs cleanly (exit 0).`
       : `Program exits with code ${runResult.code}${errLine}`);
 
-    this.emit('pipeline:done', { code: this.code, path: this.filePath, compiled: compileResult.ok, exit: runResult.code });
+    this.emit('pipeline:done', { code: this.code, path: this.filePath, compiled: final.compileOk, exit: runResult.code });
   }
 
   // Repo-mode tail: review the whole project -> compile every module (fix loop) -> run the

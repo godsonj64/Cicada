@@ -21,9 +21,12 @@ const config = { ...configMod.load(), maxTokens: 900, maxFixIterations: 1 };
 function runFile(file) {
   return new Promise((resolve) => {
     console.log('\n--- RUN OUTPUT ---');
+    // stderr must be returned as main.js does, or the runtime-repair loop can never see a
+    // traceback and the whole self-healing path goes untested.
+    let stderr = '';
     python.run({ pythonPath: config.pythonPath, file, cwd: config.workspaceDir, render: true,
-      onData: (s, t) => process.stdout.write(t),
-      onExit: (code, { images }) => { console.log(`--- exit ${code}, images=${images.length} ---`); resolve({ code, images }); } });
+      onData: (s, t) => { if (s === 'stderr') stderr += t; process.stdout.write(t); },
+      onExit: (code, { images }) => { console.log(`--- exit ${code}, images=${images.length} ---`); resolve({ code, images, stderr }); } });
   });
 }
 

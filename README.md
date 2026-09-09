@@ -32,7 +32,9 @@ leaving your machine.**
 TRy Cicada for free https://cicada.ai.studio/
 
 Instead of a single prompt-to-code shot, Cicada runs your request through a **six-stage agentic
-pipeline** (evaluate → design → generate → review → fix → run) so the output is not just
+pipeline** (evaluate → design → generate → review → fix → run) built as a
+[LangGraph](https://langchain-ai.github.io/langgraphjs/) state graph, with the two repair
+loops as subgraphs — so the output is not just
 plausible-looking code but code that has been review-checked, compile-checked, and actually
 executed — with plots and output rendered back in the UI.
 
@@ -68,6 +70,7 @@ bar).
 - 🚀 **Zero-setup first run** — if no `llama-server` is found, Cicada auto-downloads a prebuilt llama.cpp release for your platform, unzips it, and configures itself.
 - 🪟 **Native-feeling window** — a themed, frameless title bar with its own minimize/maximize/close controls (matching the app body) on Windows and Linux; macOS keeps its traffic lights.
 - 🧠 **Agentic, not one-shot** — a six-stage pipeline reviews, compiles, and runs the code it writes.
+- 🩺 **Problem-aware repair** — every failure is fingerprinted and every fix attempt recorded, so a repair is told what has already been tried and why it failed instead of blindly retrying. When the same failure survives repeated attempts the loop concedes rather than burning the budget on a dead end.
 - 📝 **Plain English → executed Python** — describe it, get runnable output, plots, and stdout/stderr.
 - 🗂️ **Single file or a real repo** — generate one `main.py` or a full multi-file project.
 - ✂️ **⌘K Edit Selection** — agentic inpainting that rewrites only the lines you select, safely.
