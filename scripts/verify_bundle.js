@@ -3,12 +3,12 @@
 // Post-build guard: every production dependency — and every peer dependency those pull in —
 // must actually be inside the packaged app.asar.
 //
-// This exists because v0.8.0 shipped broken. @langchain/core is a PEER dependency of
-// @langchain/langgraph; npm installs peers into node_modules, so development and every test
-// worked, but electron-builder bundles from package.json "dependencies" and does not follow
-// peerDependencies. The packaged app therefore crashed on startup with
-// "Cannot find module '@langchain/core/singletons'" — something no source-level test could
-// catch, because the fault only exists in the packaged artifact.
+// npm installs peer dependencies into node_modules, so development and every test work,
+// but electron-builder bundles from package.json "dependencies" and does not follow
+// peerDependencies. A missing peer therefore only shows up in the packaged artifact, as a
+// crash on startup — v0.8.0 shipped exactly that ("Cannot find module
+// '@langchain/core/singletons'", from the since-removed LangGraph dependency). No
+// source-level test can catch it, so the build checks the asar itself.
 //
 //   node scripts/verify_bundle.js [path/to/app.asar]
 

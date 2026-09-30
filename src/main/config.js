@@ -7,6 +7,13 @@ const path = require('path');
 // Resolve the user's home directory in a portable way.
 const HOME = os.homedir();
 
+// Where Cicada keeps its config, projects and workspace. GARM_HOME points everything at a
+// different folder — used by the test scripts so they can never touch a real project.
+const DATA_ROOT = process.env.GARM_HOME ? path.resolve(process.env.GARM_HOME) : path.join(HOME, 'GARM Code');
+
+// Bumped when a stored setting needs a one-time migration (see load()).
+const CONFIG_VERSION = 2;
+
 // Default GGUF model the app ships with: Qwen2.5-Coder 3B (instruct, Q4_K_M, ~2.1 GB) — a
 // strong small local coding model, fast and low-VRAM enough to load on modest machines.
 // The name and the download live in llama-installer.js, and the default points at the very
@@ -36,8 +43,11 @@ const DEFAULTS = {
   llamaBackend: '',
   // Local port llama-server binds to.
   serverPort: 8127,
-  // Context window passed to llama-server (-c).
-  contextSize: 8192,
+  // Context window passed to llama-server (-c). 16k lets the agent read a program AND write
+  // the complete corrected program back in one turn; at 8k a few-hundred-line file (or a
+  // small repo) left too little room and generation was cut off. For the default 3B model
+  // the extra KV cache is roughly 0.6 GB.
+  contextSize: 16384,
   // GPU layers to offload (-ngl). 99 == all layers (full Metal offload on Apple Silicon).
   gpuLayers: 99,
   // How the agent emits a NEW program (the create pipeline):
@@ -58,6 +68,10 @@ const DEFAULTS = {
   maxTokens: 8192,
   // How many compile/fix iterations the pipeline attempts before giving up.
   maxFixIterations: 3,
+  // When a generated program imports a common library that is not installed (numpy,
+  // pandas, matplotlib, … — an allowlist in python.js), install it and re-run instead of
+  // stopping. Unknown or heavy packages always wait for the user.
+  autoInstallDeps: true,
   // Idle cap (ms) on a single pipeline verification run. A generated program is killed only after
   // this long with NO output AND no CPU activity — the signature of a real hang (deadlock or a
   // blocking input()). A program that keeps printing, OR that stays quiet but pins the CPU (model
@@ -66,9 +80,9 @@ const DEFAULTS = {
   runTimeoutMs: 600000, // 10 minutes
   // Absolute path to the workspace where generated code and outputs live. This is the
   // ACTIVE project directory; switching projects repoints it (see src/main/projects.js).
-  workspaceDir: path.join(HOME, 'GARM Code', 'workspace'),
+  workspaceDir: path.join(DATA_ROOT, 'workspace'),
   // Root under which new projects are created (each project is a subdirectory).
-  projectsRoot: path.join(HOME, 'GARM Code', 'projects'),
+  projectsRoot: path.join(DATA_ROOT, 'projects'),
   // Python interpreter used for compile + run. Windows installs expose `python`
   // (python3 is usually only a Microsoft Store alias stub there).
   pythonPath: process.platform === 'win32' ? 'python' : 'python3',
@@ -92,7 +106,23 @@ const DEFAULTS = {
 
 function configPath() {
   // Stored next to the app data, but we keep it simple: in the workspace's parent.
-  return path.join(HOME, 'GARM Code', 'config.json');
+  return path.join(DATA_ROOT, 'config.json');
+}
+
+// One-time upgrades of stored settings. save() persists every key, so a changed default
+// never reaches an existing install on its own.
+function migrate(user) {
+  const out = { ...user };
+  const version = Number(out.configVersion) || 1;
+  if (version < 2) {
+    // 8192 was the stock context size and it was written into every config. Move installs
+    // still on that stock value AND the stock model to the new 16k default; anyone who
+    // picked their own model or size keeps it (a bigger model may not have the memory).
+    const stockModel = !out.modelPath || require('./llama-installer').isDefaultModel(out.modelPath);
+    if (out.contextSize === 8192 && stockModel && (out.provider || 'local') === 'local') out.contextSize = 16384;
+  }
+  out.configVersion = CONFIG_VERSION;
+  return out;
 }
 
 function load() {
@@ -100,12 +130,12 @@ function load() {
   let user = {};
   try {
     if (fs.existsSync(file)) {
-      user = JSON.parse(fs.readFileSync(file, 'utf8'));
+      user = migrate(JSON.parse(fs.readFileSync(file, 'utf8')));
     }
   } catch (err) {
     console.error('[config] failed to read config.json, using defaults:', err.message);
   }
-  return { ...DEFAULTS, ...user };
+  return { ...DEFAULTS, configVersion: CONFIG_VERSION, ...user };
 }
 
 function save(partial) {

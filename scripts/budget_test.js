@@ -28,25 +28,35 @@ console.log('_codeBudget tracks the context setting');
   ok('prompt cost is estimated from the messages', small.lastBudget.promptTokens > 2000, String(small.lastBudget.promptTokens));
 }
 {
-  // A prompt that swallows the whole window: room goes negative and the floor asks for
-  // more than remains, which is exactly when llama-server shifts the context and truncates.
+  // A prompt that swallows the whole window: room goes negative and the floor asks for more
+  // than remains. (llama-server accepts that and stops at the window's end; a prompt that
+  // itself overflows is rejected outright — see _overflowHelp below.)
   const p = mk(8192);
   p._codeBudget(msg(40000));
   ok('an oversized prompt leaves negative room', p.lastBudget.room < 0, String(p.lastBudget.room));
   ok('...and the floor still applies', p.lastBudget.budget === 1024, String(p.lastBudget.budget));
   const help = p._budgetHelp();
   ok('the explanation reports the context size', /8,192/.test(help), help);
-  ok('the explanation says the prompt was dropped', /context window was shifted/.test(help), help);
-  ok('the explanation says the setting now applies immediately', /takes effect immediately/.test(help));
+  ok('the explanation says there was too little room', /too little room/.test(help), help);
+  ok('the explanation says the setting applies immediately', /takes effect immediately/.test(help));
+  ok('it no longer claims the context was shifted (llama-server rejects instead)', !/shifted/.test(help), help);
 }
 {
   const p = mk(32768);
   p._codeBudget(msg(4000));
   const help = p._budgetHelp();
-  ok('a healthy budget reports no context shift', !/context window was shifted/.test(help), help);
+  ok('a healthy budget reports no shortage', !/too little room/.test(help), help);
   ok('...and still names the numbers', /32,768/.test(help));
 }
 ok('help is safe before any budget was computed', typeof mk(8192)._budgetHelp() === 'string');
+
+console.log('_overflowHelp explains a prompt that does not fit at all');
+{
+  const help = mk(8192)._overflowHelp({ nPrompt: 9500, nCtx: 8192 });
+  ok('names the tokens needed and available', /9,500/.test(help) && /8,192/.test(help), help);
+  ok('suggests a context size that would fit', /try 32,768/.test(help), help);
+  ok('works without server-reported numbers', /Raise Context size/.test(mk(8192)._overflowHelp({})));
+}
 
 console.log('repo dump scales with the window');
 {

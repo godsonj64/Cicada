@@ -21,11 +21,21 @@ const MAX_PROBLEMS = 40;              // distinct signatures retained per projec
 const MAX_ATTEMPTS = 12;              // attempts retained per problem
 const MAX_RENDER_CHARS = 1600;        // ceiling on the block injected into a prompt
 
+// Exceptions whose quoted text is a NAME (a variable, key, attribute, module or argument),
+// not data. For these the quoted name is the fault's identity: NameError 'foo' and
+// NameError 'bar' are two different bugs, and collapsing them made a repair that fixed one
+// and exposed the other look like "the same failure again", so the loop gave up while it
+// was making progress.
+const NAMED_FAULT = /^(?:NameError|UnboundLocalError|AttributeError|KeyError|ImportError|ModuleNotFoundError|TypeError)\b/;
+
 // Collapse the parts of an error that vary between runs without changing what is actually
 // wrong, so two occurrences of the same fault produce the same signature.
 function normalize(s) {
-  return String(s == null ? '' : s)
-    .replace(/(["'])(?:\\.|(?!\1).)*\1/g, '<v>')      // quoted literals
+  const text = String(s == null ? '' : s);
+  const keepNames = NAMED_FAULT.test(text.trim());
+  return text
+    .replace(/(["'])((?:\\.|(?!\1).)*)\1/g, (m, q, body) =>   // quoted literals
+      (keepNames && /^[A-Za-z_][\w.]{0,60}$/.test(body) ? q + body + q : '<v>'))
     .replace(/(?:[A-Za-z]:)?(?:[\\/][\w.\- ]+){2,}/g, '<path>')
     .replace(/\b0x[0-9a-fA-F]+\b/g, '<addr>')
     .replace(/\b\d+\b/g, '<n>')
@@ -153,8 +163,24 @@ class ProblemLedger {
 
   markResolved(signature) {
     const p = this.find(signature);
-    if (p) { p.resolved = true; p.resolvedAt = new Date().toISOString(); this.save(); }
+    if (p && !p.resolved) { p.resolved = true; p.resolvedAt = new Date().toISOString(); this.save(); }
     return p;
+  }
+
+  // A brand-new program replaces the code these failures belonged to, so they no longer
+  // describe anything real. Retire them rather than advertising them to the new program's
+  // prompts as "known unresolved issues".
+  retireAll(reason) {
+    let changed = false;
+    for (const p of this.data.problems) {
+      if (p.resolved) continue;
+      p.resolved = true;
+      p.resolvedAt = new Date().toISOString();
+      p.retired = reason || 'superseded';
+      changed = true;
+    }
+    if (changed) this.save();
+    return changed;
   }
 
   // The block injected into a repair prompt: what this problem is, how often it has been

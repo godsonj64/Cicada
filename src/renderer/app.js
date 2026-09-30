@@ -18,9 +18,9 @@
     { id: 'evaluate', name: 'Evaluate' },
     { id: 'design', name: 'System Design' },
     { id: 'generate', name: 'Generate Code' },
-    { id: 'review', name: 'Review' },
     { id: 'fix', name: 'Fix & Compile' },
     { id: 'run', name: 'Run & Render' },
+    { id: 'review', name: 'Review' },
   ];
   // Stage badges: the first stage wears the original white mark; the rest cycle through the
   // 5 gradient logo variants defined in index.html (#garm-logo-v1..v5).
@@ -181,6 +181,20 @@
       } else if (p && p.reverted) {
         appendConsole('\n[edit] Selection reverted — your code is unchanged (could not produce a compiling edit).\n', false, true);
         switchDock('console');
+      } else if (p && p.needsInput) {
+        // The program reads the keyboard, so the unattended check could only confirm it
+        // starts. Hand it straight to the user: run it interactively and focus stdin.
+        appendConsole('\n[agent] This program is interactive — starting it now. Type your input in the box below and press Enter.\n', false, true);
+        switchDock('console');
+        setTimeout(function () {
+          if (pipelineRunning || codeRunning) return;
+          loadedFile = activeFile;
+          garm.code.run(window.GARMEditor.getValue(), activeFile);
+          var stdin = $('#stdin'); if (stdin) stdin.focus();
+        }, 150);
+      } else if (p && p.missing) {
+        toast('The program needs "' + p.missing.pkg + '" — install it from the Env tab, then press Run.', 'info', 8000,
+          { label: 'Install', run: function () { startInstall(p.missing.pkg); } });
       }
     });
     garm.on('pipeline:error', function (p) {
@@ -191,16 +205,19 @@
       toast('Agent run failed: ' + p.message, 'err', 9000,
         lastAgentOp ? { label: 'Retry', run: retryLastAgentOp } : null);
     });
-    garm.on('pipeline:log', function (p) { appendConsole('[log] ' + p + '\n', false, true); });
+    garm.on('pipeline:log', function (p) { appendConsole('[agent] ' + p + '\n', false, true); });
   }
 
+  // Agent actions are available whenever the agent is idle — even while the model is still
+  // loading. The request then waits in the main process and starts on its own once the
+  // model is ready, instead of the buttons sitting disabled with no explanation.
   function setPipelineRunning(on) {
     pipelineRunning = on;
-    $('#btn-run-pipeline').disabled = on || !modelReady;
+    $('#btn-run-pipeline').disabled = on;
     $('#btn-cancel-pipeline').disabled = !on;
-    $('#btn-refine').disabled = on || !modelReady;
-    $('#btn-edit-selection').disabled = on || !modelReady;
-    $('#btn-inpaint-apply').disabled = on || !modelReady;
+    $('#btn-refine').disabled = on;
+    $('#btn-edit-selection').disabled = on;
+    $('#btn-inpaint-apply').disabled = on;
     // While the agent owns the file, block editor actions that write/run the same file —
     // an editor Run would kill the agent's verification run; Save/Compile would race its writes.
     $('#btn-run').disabled = on || codeRunning;
@@ -211,6 +228,7 @@
   }
 
   function startTimer() {
+    if (timerHandle) clearInterval(timerHandle);
     timerStart = Date.now();
     var el = $('#pipeline-timer');
     timerHandle = setInterval(function () {
@@ -235,7 +253,12 @@
 
   function wireRun() {
     garm.on('run:clear', function () { $('#console').innerHTML = ''; });
-    garm.on('run:started', function (p) { setCodeRunning(true); appendConsole('> python ' + (p.file ? p.file.split(/[\\/]/).pop() : 'main.py') + '\n', false, true); });
+    garm.on('run:started', function (p) {
+      setCodeRunning(true);
+      // An agent re-run keeps the previous output (e.g. the traceback that triggered a repair).
+      if (p && p.separator) appendConsole('\n──────── re-running ────────\n', false, true);
+      appendConsole('> python ' + (p && p.file ? p.file.split(/[\\/]/).pop() : 'main.py') + '\n', false, true);
+    });
     garm.on('run:data', function (p) { appendConsole(p.text, p.stream === 'stderr'); });
     garm.on('run:exit', function (p) { setCodeRunning(false); appendConsole('\n[process exited with code ' + p.code + ']\n', false, true); });
     garm.on('run:images', function (p) { showImages(p.images); if (p.images && p.images.length) switchDock('render'); });
@@ -295,8 +318,33 @@
     });
   }
 
+  // ---- Composer text boxes ---------------------------------------------
+  // The prompt, "iterate" and chat boxes grow with their text up to a cap and only then
+  // scroll — instead of a fixed height that hid lines behind a stray scrollbar. Returns a
+  // refit function for when the value is set from code.
+  var composerFits = {};
+  function autoGrow(sel, minPx, maxPx) {
+    var el = $(sel);
+    if (!el) return function () {};
+    var fit = function () {
+      el.style.height = 'auto';
+      var chrome = el.offsetHeight - el.clientHeight; // borders (box-sizing: border-box)
+      var want = el.scrollHeight + chrome;
+      el.style.height = Math.max(minPx, Math.min(want, maxPx)) + 'px';
+      el.style.overflowY = want > maxPx ? 'auto' : 'hidden';
+    };
+    el.addEventListener('input', fit);
+    composerFits[sel] = fit;
+    fit();
+    return fit;
+  }
+  function refit(sel) { if (composerFits[sel]) composerFits[sel](); }
+  window.addEventListener('resize', function () { Object.keys(composerFits).forEach(refit); });
+
   // ---- Toolbar actions ---------------------------------------------------
   function wireToolbar() {
+    autoGrow('#prompt', 92, 260);
+    autoGrow('#refine-input', 24, 132);
     $('#btn-run').addEventListener('click', function () {
       switchDock('console');
       loadedFile = activeFile;
@@ -340,37 +388,62 @@
   // pipeline restores the original code on failure, so it is the correct base).
   var lastAgentOp = null;
 
+  // Mark the agent busy the moment a request is sent (it may first wait for the model to
+  // load, before any pipeline event arrives), so it cannot be double-submitted.
+  function beginAgentRequest() {
+    setPipelineRunning(true);
+    if (!modelReady) {
+      switchDock('console');
+      appendConsole('\n[agent] The model is still loading — your request will start as soon as it is ready. Press Cancel to abandon it.\n', false, true);
+    }
+  }
+
+  // An agent request that failed before or outside the pipeline (e.g. the model could not
+  // start, or the wait was cancelled). A "busy" rejection means another run is still
+  // going, so the UI must stay in its running state for that one.
+  function agentRequestFailed(err) {
+    var msg = (err && err.message) || String(err);
+    msg = msg.replace(/^Error invoking remote method '[^']+': (Error: )?/, '');
+    if (/already working/.test(msg)) { toast(msg, 'info'); return; }
+    setPipelineRunning(false); stopTimer();
+    if (/Cancelled while waiting/.test(msg)) { appendConsole('\n[agent] Cancelled.\n', false, true); return; }
+    appendConsole('\n[error] ' + msg + '\n', true);
+    toast('Agent request failed: ' + msg, 'err', 9000, lastAgentOp ? { label: 'Retry', run: retryLastAgentOp } : null);
+  }
+
   function retryLastAgentOp() {
     var op = lastAgentOp;
     if (!op || pipelineRunning) return;
-    if (!modelReady) { toast('The model is not ready yet — watch the status pill.', 'info'); return; }
-    if (op.kind === 'create') { $('#prompt').value = op.req; runPipeline(); }
+    if (op.kind === 'create') { $('#prompt').value = op.req; refit('#prompt'); runPipeline(); }
     else if (op.kind === 'refine') {
-      garm.pipeline.refine(op.req, window.GARMEditor.getValue(), activeFile)
-        .catch(function (err) { appendConsole('\n[error] ' + err.message + '\n', true); setPipelineRunning(false); stopTimer(); });
+      beginAgentRequest();
+      garm.pipeline.refine(op.req, window.GARMEditor.getValue(), activeFile).catch(agentRequestFailed);
     } else if (op.kind === 'inpaint') {
-      garm.pipeline.inpaint(op.req, window.GARMEditor.getValue(), op.range, activeFile)
-        .catch(function (err) { appendConsole('\n[error] ' + err.message + '\n', true); setPipelineRunning(false); stopTimer(); });
+      beginAgentRequest();
+      garm.pipeline.inpaint(op.req, window.GARMEditor.getValue(), op.range, activeFile).catch(agentRequestFailed);
     }
   }
 
   function runPipeline() {
     var req = $('#prompt').value.trim();
     if (!req) { $('#prompt').focus(); return; }
-    if (!modelReady) return;
+    if (pipelineRunning) return;
     lastAgentOp = { kind: 'create', req: req };
-    garm.pipeline.run(req).catch(function (err) { appendConsole('\n[error] ' + err.message + '\n', true); setPipelineRunning(false); stopTimer(); });
+    beginAgentRequest();
+    garm.pipeline.run(req).catch(agentRequestFailed);
   }
 
   // Post-edit agentic iteration: apply a change to the current editor code.
   function runRefine() {
     var req = $('#refine-input').value.trim();
     if (!req) { $('#refine-input').focus(); return; }
-    if (!modelReady || pipelineRunning) return;
+    if (pipelineRunning) return;
     var code = window.GARMEditor.getValue();
     lastAgentOp = { kind: 'refine', req: req };
-    garm.pipeline.refine(req, code, activeFile).catch(function (err) { appendConsole('\n[error] ' + err.message + '\n', true); setPipelineRunning(false); stopTimer(); });
+    beginAgentRequest();
+    garm.pipeline.refine(req, code, activeFile).catch(agentRequestFailed);
     $('#refine-input').value = '';
+    refit('#refine-input');
   }
 
   function escapeHtml(s) { return String(s).replace(/[&<>"']/g, function (c) { return ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]; }); }
@@ -387,7 +460,7 @@
   function openInpaint(sel) {
     sel = sel || window.GARMEditor.getSelection();
     if (!sel || sel.empty) { flashInpaintHint(); return; }
-    if (!modelReady || pipelineRunning) return;
+    if (pipelineRunning) return;
     inpaintSelection = sel;
     var end = effectiveEndLine(sel.range);
     $('#inpaint-range').textContent = sel.range.startLine === end
@@ -412,15 +485,14 @@
     if (!inpaintSelection) return;
     var instr = $('#inpaint-input').value.trim();
     if (!instr) { $('#inpaint-input').focus(); return; }
-    if (!modelReady || pipelineRunning) return;
+    if (pipelineRunning) return;
     var code = window.GARMEditor.getValue();
     var range = inpaintSelection.range;
     closeInpaint();
     switchDock('console');
     lastAgentOp = { kind: 'inpaint', req: instr, range: range };
-    garm.pipeline.inpaint(instr, code, range, activeFile).catch(function (err) {
-      appendConsole('\n[error] ' + err.message + '\n', true); setPipelineRunning(false); stopTimer();
-    });
+    beginAgentRequest();
+    garm.pipeline.inpaint(instr, code, range, activeFile).catch(agentRequestFailed);
   }
 
   function flashInpaintHint() {
@@ -856,10 +928,6 @@
       text.textContent = 'Error: ' + (brief.length > 60 ? brief.slice(0, 57) + '…' : brief) + ' — click to retry';
       pill.title = brief + '\nClick to retry (re-detects the binary and model, restarts the server).';
     } else { text.textContent = 'Stopped — click to start'; pill.title = 'Click to start the local model.'; }
-    $('#btn-run-pipeline').disabled = pipelineRunning || !modelReady;
-    $('#btn-refine').disabled = pipelineRunning || !modelReady;
-    $('#btn-edit-selection').disabled = pipelineRunning || !modelReady;
-    $('#btn-inpaint-apply').disabled = pipelineRunning || !modelReady;
   }
 
   var llamaInstalling = false;
@@ -998,10 +1066,11 @@
       };
       var serverChanged = currentConfig && SERVER_FIELDS.some(function (k) { return currentConfig[k] !== next[k]; });
       $('#settings-overlay').classList.add('hidden');
-      // Only the local server needs a restart (and only when its settings changed). For
-      // DeepSeek — or any other change — config:set applies it and pushes a fresh status.
-      if (next.provider === 'local' && serverChanged) { applyStatus('starting'); garm.llama.restart(next); }
-      else garm.config.set(next);
+      // One path for every change: config:set restarts llama-server itself when a spawn-time
+      // setting changed, AND applies everything else (a new Python interpreter re-probes the
+      // environment). The old restart-only path skipped those when both kinds changed.
+      if (next.provider === 'local' && serverChanged) applyStatus('starting', 'Restarting model…');
+      garm.config.set(next).catch(function (err) { toast('Could not save settings: ' + err.message, 'err'); });
       currentConfig = next;
     });
   }
@@ -1010,14 +1079,21 @@
   function wireSplitters() {
     var agent = $('#agent');
     var dock = $('#dock');
+    var chat = $('#chat-panel');
     document.querySelectorAll('.splitter').forEach(function (sp) {
       sp.addEventListener('mousedown', function (e) {
         e.preventDefault();
         var kind = sp.dataset.split;
         var startX = e.clientX, startY = e.clientY;
-        var startW = agent.offsetWidth, startH = dock.offsetHeight;
+        var startW = agent.offsetWidth, startH = dock.offsetHeight, startChat = chat.offsetWidth;
         function move(ev) {
-          if (kind === 'agent') {
+          if (kind === 'chat') {
+            // The panel sits on the right, so dragging the splitter LEFT widens it.
+            var cw = Math.min(720, Math.max(280, startChat - (ev.clientX - startX)));
+            chat.style.flex = '0 0 ' + cw + 'px';
+            chat.style.width = cw + 'px';
+            window.GARMEditor.layout();
+          } else if (kind === 'agent') {
             var w = Math.min(640, Math.max(280, startW + (ev.clientX - startX)));
             agent.style.flex = '0 0 ' + w + 'px';
             agent.style.width = w + 'px';
@@ -1028,7 +1104,11 @@
             window.GARMEditor.layout();
           }
         }
-        function up() { document.removeEventListener('mousemove', move); document.removeEventListener('mouseup', up); window.GARMTerm.fit(); window.GARMEditor.layout(); }
+        function up() {
+          document.removeEventListener('mousemove', move); document.removeEventListener('mouseup', up);
+          window.GARMTerm.fit(); window.GARMEditor.layout();
+          if (kind === 'chat') { try { localStorage.setItem(CHAT_WIDTH_KEY, String(chat.offsetWidth)); } catch (err) { /* storage unavailable */ } }
+        }
         document.addEventListener('mousemove', move);
         document.addEventListener('mouseup', up);
       });
@@ -1351,9 +1431,52 @@
   var chatStreamEl = null;  // the assistant bubble currently being streamed into
 
   function openChat(sel) {
-    switchDock('chat');
+    setChatPanel(true, true);
     if (sel && sel.range && !sel.empty) setChatAttach(sel);
     setTimeout(function () { $('#chat-input').focus(); }, 0);
+  }
+
+  // ---- Chat side panel ---------------------------------------------------
+  // Chat lives in a collapsible, resizable panel on the right (it used to be a tab in the
+  // bottom dock). Whether it is open, and its width, are remembered per machine.
+  var CHAT_OPEN_KEY = 'cicada.chat.open.v1';
+  var CHAT_WIDTH_KEY = 'cicada.chat.width.v1';
+
+  function chatPanelOpen() { return !$('#chat-panel').classList.contains('collapsed'); }
+
+  function setChatPanel(open, persist) {
+    $('#chat-panel').classList.toggle('collapsed', !open);
+    $('.splitter-chat').classList.toggle('collapsed', !open);
+    var t = $('#btn-chat-toggle');
+    t.classList.toggle('active', open);
+    t.setAttribute('aria-pressed', open ? 'true' : 'false');
+    t.title = (open ? 'Hide chat' : 'Show chat') + ' (' + (/Mac/i.test(navigator.platform) ? '⌘⇧L' : 'Ctrl+Shift+L') + ')';
+    if (persist) { try { localStorage.setItem(CHAT_OPEN_KEY, open ? '1' : '0'); } catch (e) { /* storage unavailable */ } }
+    // The editor and terminal fill whatever width is left; re-fit them to the new layout.
+    // The chat box is re-measured too: while the panel was hidden it had no size.
+    setTimeout(function () { window.GARMEditor.layout(); window.GARMTerm.fit(); if (open) refit('#chat-input'); }, 30);
+  }
+
+  function toggleChatPanel() {
+    var open = !chatPanelOpen();
+    setChatPanel(open, true);
+    if (open) setTimeout(function () { $('#chat-input').focus(); }, 0);
+  }
+
+  function wireChatPanel() {
+    var stored = null, width = NaN;
+    try { stored = localStorage.getItem(CHAT_OPEN_KEY); width = parseInt(localStorage.getItem(CHAT_WIDTH_KEY), 10); } catch (e) { /* storage unavailable */ }
+    if (width >= 280 && width <= 720) {
+      var panel = $('#chat-panel');
+      panel.style.flex = '0 0 ' + width + 'px';
+      panel.style.width = width + 'px';
+    }
+    // First run: open only when there is room beside the editor. In the default 1440px
+    // window an open panel squeezes the editor to ~500px and long lines scroll sideways, so
+    // it starts closed there (the top-bar button or ⌘⇧L opens it; the choice is remembered).
+    setChatPanel(stored == null ? window.innerWidth >= 1600 : stored === '1', false);
+    $('#btn-chat-toggle').addEventListener('click', toggleChatPanel);
+    $('#btn-chat-collapse').addEventListener('click', function () { setChatPanel(false, true); });
   }
 
   function setChatAttach(sel) {
@@ -1406,18 +1529,15 @@
     var turn = { role: 'user', content: text };
     if (chatAttach) turn.context = chatAttach;
     chatTurns.push(turn);
-    input.value = ''; input.style.height = 'auto';
+    input.value = ''; refit('#chat-input');
     clearChatAttach();
-
-    if (!modelReady) {
-      chatBubble('assistant').innerHTML = '<span class="chat-note">Model is not ready yet — set a provider in Settings.</span>';
-      chatTurns.pop();
-      return;
-    }
 
     chatRaw = '';
     chatStreamEl = chatBubble('assistant');
-    chatStreamEl.innerHTML = '<span class="chat-typing"><i></i><i></i><i></i></span>';
+    // The request waits for the model rather than failing while it loads.
+    chatStreamEl.innerHTML = modelReady
+      ? '<span class="chat-typing"><i></i><i></i><i></i></span>'
+      : '<span class="chat-note">Waiting for the model to finish loading…</span>';
     chatStreaming = true; setChatSendUI(true);
 
     garm.chat.send(chatTurns).catch(function (err) {
@@ -1437,10 +1557,7 @@
     input.addEventListener('keydown', function (e) {
       if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendChat(); }
     });
-    input.addEventListener('input', function () {
-      input.style.height = 'auto';
-      input.style.height = Math.min(input.scrollHeight, 140) + 'px';
-    });
+    autoGrow('#chat-input', 24, 140);
 
     garm.on('chat:delta', function (p) {
       if (!chatStreaming || !chatStreamEl) return;
@@ -2877,7 +2994,8 @@
       { name: 'Welcome Tour', run: function () { $('#btn-welcome').click(); } },
       { name: 'Open Project Folder', run: function () { garm.shell.showWorkspace(); } },
     ];
-    ['console', 'render', 'data', 'notebook', 'research', 'runs', 'terminal', 'memory', 'env', 'history', 'github', 'problems', 'chat'].forEach(function (tab) {
+    cmds.push({ name: 'View: Toggle Chat Panel', hint: 'Ctrl+Shift+L', run: toggleChatPanel });
+    ['console', 'render', 'data', 'notebook', 'research', 'runs', 'terminal', 'memory', 'env', 'history', 'github', 'problems'].forEach(function (tab) {
       cmds.push({ name: 'View: ' + tab.charAt(0).toUpperCase() + tab.slice(1) + ' Tab', run: function () { switchDock(tab); } });
     });
     return cmds;
@@ -2966,6 +3084,8 @@
         e.preventDefault(); e.stopPropagation(); openSearch();
       } else if (mod && e.shiftKey && (e.key === 'M' || e.key === 'm')) {
         e.preventDefault(); e.stopPropagation(); openDashboard();
+      } else if (mod && e.shiftKey && (e.key === 'L' || e.key === 'l')) {
+        e.preventDefault(); e.stopPropagation(); toggleChatPanel();
       } else if (e.key === 'Escape' && !$('#search-overlay').classList.contains('hidden')) {
         e.preventDefault(); closeSearch();
       } else if (e.key === 'Escape' && !$('#dashboard-overlay').classList.contains('hidden')) {
@@ -2981,7 +3101,7 @@
   function fixPlatformKeys() {
     if (/Mac/i.test(navigator.platform)) return;
     var swap = function (s) {
-      return s.replace(/⌘\s?↵/g, 'Ctrl+Enter').replace(/⌘K/g, 'Ctrl+K').replace(/⌘L/g, 'Ctrl+L').replace(/⌘/g, 'Ctrl+');
+      return s.replace(/⌘⇧/g, 'Ctrl+Shift+').replace(/⌘\s?↵/g, 'Ctrl+Enter').replace(/⌘K/g, 'Ctrl+K').replace(/⌘L/g, 'Ctrl+L').replace(/⌘/g, 'Ctrl+');
     };
     document.querySelectorAll('[title]').forEach(function (el) {
       if (el.title.indexOf('⌘') >= 0) el.title = swap(el.title);
@@ -3056,6 +3176,7 @@
     wireHistory();
     wireDoctor();
     wireSysmon();
+    wireChatPanel();
     wireChat();
     wireGitHub();
     wirePalette();

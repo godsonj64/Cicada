@@ -30,6 +30,18 @@ const tb3 = 'Traceback (most recent call last):\n  File "main.py", line 3\nKeyEr
 ok('a different exception -> different signature',
   classify('runtime', tb1).signature !== classify('runtime', tb3).signature);
 
+console.log('classify — a quoted NAME is the fault\'s identity');
+// NameError 'foo' and NameError 'bar' are two different bugs. When they collapsed to one
+// signature, fixing one and exposing the other looked like "the same failure again" and
+// the repair loop gave up while it was making progress.
+const ne = (n) => `Traceback (most recent call last):\n  File "main.py", line 7\nNameError: name '${n}' is not defined`;
+ok('different undefined names -> different signatures', classify('runtime', ne('foo')).signature !== classify('runtime', ne('bar')).signature);
+ok('the same undefined name at another line -> same signature', classify('runtime', ne('foo')).signature === classify('runtime', ne('foo').replace('line 7', 'line 70')).signature);
+ok('different missing keys -> different signatures', classify('runtime', "KeyError: 'price'").signature !== classify('runtime', "KeyError: 'qty'").signature);
+ok('different missing attributes -> different signatures',
+  classify('runtime', "AttributeError: 'DataFrame' object has no attribute 'foo'").signature !==
+  classify('runtime', "AttributeError: 'DataFrame' object has no attribute 'bar'").signature);
+
 console.log('classify — missing dependency keeps module identity');
 const m1 = "ModuleNotFoundError: No module named 'torch'";
 const m2 = "ModuleNotFoundError: No module named 'pandas'";
@@ -74,6 +86,9 @@ ok('attempt history survives a restart', led2.find(p1.signature).attempts.length
 const led3 = new ProblemLedger(dir);
 led3.observe('runtime', tb3);
 ok('unresolved issues are surfaced to a new run', /KeyError/.test(led3.renderKnownIssues(5)), led3.renderKnownIssues(5));
+led3.retireAll('superseded by a new program');
+ok('retireAll clears known issues when a new program replaces the old one', led3.renderKnownIssues(5) === '');
+ok('...but keeps the history on disk', new ProblemLedger(dir).find(classify('runtime', tb3).signature).retired === 'superseded by a new program');
 
 fs.rmSync(dir, { recursive: true, force: true });
 console.log('\n' + (fail ? '✗ ' : '✓ ') + pass + ' passed, ' + fail + ' failed');

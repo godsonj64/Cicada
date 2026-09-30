@@ -5,7 +5,7 @@
 // the edit landed, the code outside the region is preserved, and the result compiles.
 // Run with the model available:  node scripts/inpaint_e2e.js
 const path = require('path');
-const configMod = require('../src/main/config');
+const { isolatedConfig, makeRunFile, cleanup } = require('./_e2e');
 const { LlamaServer } = require('../src/main/llama');
 const { Pipeline } = require('../src/main/pipeline');
 const { ContextMemory } = require('../src/main/memory');
@@ -25,16 +25,10 @@ if __name__ == "__main__":
 const SELECTION = { startLine: 3, startColumn: 1, endLine: 5, endColumn: 1 };
 const INSTRUCTION = process.argv.slice(2).join(' ') || 'Replace the loop with a single call to the built-in sum().';
 
-const config = { ...configMod.load(), maxTokens: 900, maxFixIterations: 2 };
+// A throwaway workspace: never the user's active project.
+const config = isolatedConfig({ maxTokens: 900, maxFixIterations: 2 });
 
-function runFile(file) {
-  return new Promise((resolve) => {
-    let stderr = '';
-    python.run({ pythonPath: config.pythonPath, file, cwd: config.workspaceDir, render: true,
-      onData: (s, t) => { if (s === 'stderr') stderr += t; process.stdout.write(t); },
-      onExit: (code, { images }) => resolve({ code, images, stderr }) });
-  });
-}
+const runFile = makeRunFile(config);
 
 (async () => {
   const llama = new LlamaServer(config);
@@ -70,7 +64,8 @@ function runFile(file) {
   console.log('Header preserved?      ' + headOk);
   console.log('Footer preserved?      ' + tailOk);
 
-  llama.stop();
+  await llama.stop();
+  cleanup(config);
   const good = compiled.ok && headOk && tailOk;
-  setTimeout(() => process.exit(good ? 0 : 1), 800);
+  setTimeout(() => process.exit(good ? 0 : 1), 200);
 })().catch((e) => { console.error(e); process.exit(1); });

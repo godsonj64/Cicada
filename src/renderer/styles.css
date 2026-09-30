@@ -158,7 +158,9 @@ body.window-maximized .win-restore-ico { display: block; }
 #main { flex: 1; display: flex; min-height: 0; }
 .panel { background: transparent; display: flex; flex-direction: column; min-height: 0; }
 #agent { width: 392px; flex: 0 0 392px; border-right: 1px solid var(--line); }
-#workbench { flex: 1; display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+/* overflow: hidden keeps a toolbar that is wider than the space left (e.g. with the chat
+   panel open) from painting over its neighbours; the bars below scroll or compact instead. */
+#workbench { flex: 1; display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; }
 
 .splitter { background: transparent; z-index: 5; }
 .splitter-v { width: 7px; margin: 0 -3.5px; cursor: col-resize; flex: 0 0 7px; }
@@ -177,7 +179,8 @@ body.window-maximized .win-restore-ico { display: block; }
 #prompt {
   width: 100%;
   height: 92px;
-  resize: vertical;
+  resize: none;
+  overflow-y: hidden; /* app.js grows the box with its text, and scrolls only past the cap */
   background: var(--bg-1);
   color: var(--text);
   border: 1px solid var(--line);
@@ -203,7 +206,14 @@ body.window-maximized .win-restore-ico { display: block; }
   font-family: var(--font); font-size: 12px; font-weight: 550; letter-spacing: -0.005em;
   transition: background .16s, color .16s;
 }
-.om-opt svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linejoin: round; stroke-linecap: round; }
+.om-opt svg { flex: 0 0 auto; width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linejoin: round; stroke-linecap: round; }
+/* Labels stay on one line (they wrapped to two in a narrow sidebar). */
+.om-opt { min-width: 0; white-space: nowrap; }
+.om-opt span { overflow: hidden; text-overflow: ellipsis; }
+.om-label { flex: 0 0 auto; }
+/* In a narrow sidebar the caption gives its room to the options, which keep full labels. */
+.prompt-area { container-type: inline-size; }
+@container (max-width: 300px) { .om-label { display: none; } }
 .om-opt:hover { color: var(--text); }
 .om-opt.active { background: var(--bg-2); color: var(--text); box-shadow: 0 1px 2px rgba(0,0,0,0.3); }
 .om-opt:disabled { opacity: 0.5; cursor: default; }
@@ -345,13 +355,15 @@ body.window-maximized .win-restore-ico { display: block; }
 }
 .refine-box:focus-within { border-color: var(--focus); box-shadow: 0 0 0 4px rgba(255,255,255,0.04); }
 #refine-input {
-  flex: 1; resize: none; min-height: 24px; max-height: 132px;
+  flex: 1; resize: none; min-height: 24px; max-height: 132px; overflow-y: hidden;
   background: transparent; color: var(--text);
   border: 0; outline: none;
   padding: 6px 4px 6px 8px; font-family: var(--font); font-size: 13px; line-height: 1.45;
   letter-spacing: -0.006em;
 }
 #refine-input::placeholder { color: var(--text-3); }
+#refine-input::placeholder, #chat-input::placeholder { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#prompt::-webkit-scrollbar, #refine-input::-webkit-scrollbar, #chat-input::-webkit-scrollbar { width: 8px; }
 /* Circular send button — muted until the field has content (and the agent is free). */
 .refine-send {
   flex: 0 0 auto; display: grid; place-items: center;
@@ -372,6 +384,20 @@ body.window-maximized .win-restore-ico { display: block; }
   display: flex; align-items: center; gap: 8px;
   padding: 9px 14px; background: rgba(5, 5, 6, 0.6);
   border-bottom: 1px solid var(--line); flex: 0 0 auto;
+  overflow-x: auto; scrollbar-width: none;
+}
+.editor-toolbar::-webkit-scrollbar { display: none; }
+.editor-toolbar > * { flex: 0 0 auto; white-space: nowrap; }
+.editor-toolbar > .toolbar-spacer { flex: 1 1 0; min-width: 0; }
+.editor-toolbar > .file-tab { flex: 0 1 auto; min-width: 72px; overflow: hidden; }
+.file-tab .file-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* A narrow editor (chat panel open in a small window): tighter buttons, and the save state
+   collapses to its coloured dot so the toolbar still fits on one line. */
+#editor-region { container-type: inline-size; }
+@container (max-width: 600px) {
+  .editor-toolbar { gap: 4px; padding: 9px 10px; }
+  .editor-toolbar .btn { padding-left: 9px; padding-right: 9px; }
+  .editor-toolbar .save-state { font-size: 0; gap: 0; margin-right: 4px; }
 }
 .toolbar-spacer { flex: 1; }
 .file-tab {
@@ -388,7 +414,16 @@ body.window-maximized .win-restore-ico { display: block; }
 
 /* ---------- Dock ---------- */
 #dock { height: 290px; flex: 0 0 290px; display: flex; flex-direction: column; border-top: 1px solid var(--line); min-height: 0; background: var(--bg); }
-.dock-tabs { display: flex; align-items: center; gap: 2px; padding: 6px 10px; background: rgba(5, 6, 6, 0.6); border-bottom: 1px solid var(--line); flex: 0 0 auto; }
+.dock-tabs { display: flex; align-items: center; gap: 8px; padding: 6px 10px; background: rgba(5, 6, 6, 0.6); border-bottom: 1px solid var(--line); flex: 0 0 auto; }
+/* Tabs keep their size and scroll sideways when space is short (they used to wrap — "Runs"
+   above its badge — and spill past the dock's edge); the monitor and Clear stay pinned. */
+.dock-tab-strip { display: flex; align-items: center; gap: 2px; flex: 1 1 auto; min-width: 0; overflow-x: auto; scrollbar-width: none;
+  -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 28px), transparent); mask-image: linear-gradient(to right, #000 calc(100% - 28px), transparent); padding-right: 24px; }
+.dock-tab-strip::-webkit-scrollbar { display: none; }
+.dock-tab-strip > * { flex: 0 0 auto; white-space: nowrap; }
+.dock-tabs > .sysmon, .dock-tabs > .btn { flex: 0 0 auto; white-space: nowrap; }
+#dock { container-type: inline-size; }
+@container (max-width: 1000px) { .dock-tabs > .sysmon { display: none; } }
 .dock-tab {
   background: transparent; border: none; color: var(--text-3);
   padding: 7px 13px; font-size: 12px; cursor: pointer; border-radius: var(--radius-sm);
@@ -678,8 +713,17 @@ body.window-maximized .win-restore-ico { display: block; }
 ::-webkit-scrollbar-track { background: transparent; }
 
 /* ---------- Chat agent ---------- */
-.dock-tab-chat { display: inline-flex; align-items: center; gap: 6px; }
+/* A collapsible, resizable side panel on the right of the main split (it used to be a tab in
+   the bottom dock). Width is set inline by the splitter; collapsed hides it entirely. */
+#chat-panel { width: 340px; flex: 0 0 340px; min-width: 0; border-left: 1px solid var(--line); background: var(--bg); overflow: hidden; }
+#chat-panel.collapsed, .splitter-chat.collapsed { display: none; }
+.chat-title { display: inline-flex; align-items: center; gap: 7px; }
 .chat-ico { width: 16px; height: 16px; display: block; }
+.icon-btn.active { background: var(--bg-2); color: var(--text); border-color: var(--line-2); }
+/* A compact, borderless header button that keeps the panel head the same height as the
+   agent sidebar's. */
+.icon-btn.icon-btn-sm { width: 22px; height: 22px; margin: -4px -6px -4px 0; border-color: transparent; }
+.icon-btn.icon-btn-sm svg { width: 15px; height: 15px; }
 
 .chat-wrap { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 .chat-scroll { flex: 1; min-height: 0; overflow-y: auto; padding: 14px 16px; display: flex; flex-direction: column; gap: 14px; }
@@ -705,7 +749,7 @@ body.window-maximized .win-restore-ico { display: block; }
 
 .chat-composer { display: flex; align-items: flex-end; gap: 6px; margin: 0 14px 14px; padding: 6px 6px 6px 4px; background: var(--bg-input); border: 1px solid var(--line); border-radius: var(--radius); transition: border-color .18s, box-shadow .18s; }
 .chat-composer:focus-within { border-color: var(--focus); box-shadow: 0 0 0 4px rgba(255, 255, 255, 0.04); }
-#chat-input { flex: 1; resize: none; min-height: 24px; max-height: 140px; background: transparent; color: var(--text); border: 0; outline: none; padding: 6px 4px 6px 8px; font-family: var(--font); font-size: 13px; line-height: 1.45; }
+#chat-input { flex: 1; resize: none; min-height: 24px; max-height: 140px; overflow-y: hidden; background: transparent; color: var(--text); border: 0; outline: none; padding: 6px 4px 6px 8px; font-family: var(--font); font-size: 13px; line-height: 1.45; }
 #chat-input::placeholder { color: var(--text-3); }
 #chat-input:not(:placeholder-shown) ~ #btn-chat-send { background: var(--text); color: #050506; }
 #btn-chat-send.is-streaming { background: var(--text); }

@@ -61,8 +61,18 @@ try:
         _ssl._create_default_https_context = lambda *a, **k: _ssl.create_default_context(cafile=_ca)
 except Exception:
     pass
-_target = sys.argv[1]
-_outdir = os.path.dirname(os.path.abspath(_target)) or "."
+_target = os.path.abspath(sys.argv[1])
+# Match "python path/to/script.py": the script's own folder comes first on sys.path, so a
+# nested file can import its siblings. The project root (the working directory, where this
+# harness lives) stays importable too, for project-absolute imports like "from models.net".
+_script_dir = os.path.dirname(_target)
+_root = os.getcwd()
+sys.path[:] = [_script_dir] + [p for p in sys.path if os.path.abspath(p or ".") not in (_script_dir, _root)]
+if _root != _script_dir:
+    sys.path.insert(1, _root)
+# Figures land in the working directory, which is where the IDE looks for them — saving
+# next to a nested script hid its plots from the Render panel.
+_outdir = _root
 try:
     import matplotlib
     matplotlib.use("Agg", force=True)
@@ -82,28 +92,68 @@ try:
                 print("[cicada] could not save figure:", _e, file=sys.stderr)
             if close:
                 _plt.close(fig)
-    # plt.show() is a no-op under Agg, so we capture on show.
+    # plt.show() is a no-op under Agg, so we capture on show — and on Figure.show(), which
+    # Agg also ignores (with only a warning), so figures shown that way used to vanish.
     _plt.show = lambda *a, **k: _save_open(True)
+    import matplotlib.figure as _mfig
+    _mfig.Figure.show = lambda self, *a, **k: _save_open(True)
 except Exception:
-    pass
+    _save_open = None
 sys.argv = [_target] + sys.argv[2:]
-runpy.run_path(_target, run_name="__main__")
+_failed = False
+try:
+    runpy.run_path(_target, run_name="__main__")
+except (SystemExit, KeyboardInterrupt):
+    raise
+except BaseException as _exc:
+    # Report the program's own traceback. The frames of this harness and of runpy are not
+    # the program's; they led every traceback and pushed the real error out of view (for
+    # the user and for the repair model alike).
+    import traceback as _tb
+    _here = os.path.abspath(__file__)
+    _t = _exc.__traceback__
+    while _t is not None:
+        _fn = _t.tb_frame.f_code.co_filename
+        if os.path.abspath(_fn) == _here or "runpy" in _fn:
+            _t = _t.tb_next
+        else:
+            break
+    _tb.print_exception(type(_exc), _exc, _t)
+    _failed = True
+finally:
+    # End-of-run sweep: a figure that was drawn but never shown is still the program's
+    # output. This also runs when the program ends via sys.exit() or an exception.
+    if _save_open is not None:
+        try:
+            _save_open(True)
+        except Exception:
+            pass
+if _failed:
+    sys.exit(1)  # the exit status of an uncaught exception
 `;
 
-// Images in `dir` modified at or after `sinceMs`. Detecting by modification time
+// Folders never scanned for program output: environments, VCS, caches, and Cicada's own
+// state (snapshots hold copies of old images that must not resurface as new output).
+const SCAN_SKIP = new Set(['.git', '.garm', '.venv', 'venv', 'env', 'node_modules', '__pycache__', '.ipynb_checkpoints', 'site-packages']);
+
+// Images under `dir` modified at or after `sinceMs`. Detecting by modification time
 // (not filename novelty) means re-runs that overwrite the same file — e.g. the
 // harness's _garm_plot_01.png, or a script's fixed output.png — are still picked up.
-function imagesModifiedSince(dir, sinceMs) {
-  try {
-    return fs.readdirSync(dir)
-      .filter((f) => IMAGE_EXTS.has(path.extname(f).toLowerCase()) && f !== '_garm_harness.py')
-      .map((f) => path.join(dir, f))
-      .filter((p) => {
-        try { return fs.statSync(p).mtimeMs >= sinceMs; } catch (_) { return false; }
-      });
-  } catch (_) {
-    return [];
+// Scans a few levels deep so a program that writes to outputs/ or figures/ is shown too.
+function imagesModifiedSince(dir, sinceMs, depth = 3, out = []) {
+  let entries;
+  try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch (_) { return out; }
+  for (const e of entries) {
+    if (out.length >= 60) break;
+    const p = path.join(dir, e.name);
+    if (e.isDirectory()) {
+      if (depth > 1 && !SCAN_SKIP.has(e.name) && !e.name.startsWith('.')) imagesModifiedSince(p, sinceMs, depth - 1, out);
+      continue;
+    }
+    if (!e.isFile() || !IMAGE_EXTS.has(path.extname(e.name).toLowerCase())) continue;
+    try { if (fs.statSync(p).mtimeMs >= sinceMs) out.push(p); } catch (_) { /* vanished */ }
   }
+  return out;
 }
 
 // Remove the harness's own plot outputs from a prior run so the Render panel
@@ -153,9 +203,11 @@ async function compileCheckFiles({ pythonPath, files }) {
 /**
  * Run a Python file with streaming output. Returns a handle with write()/kill().
  *  onData(stream, text)  stream is 'stdout' | 'stderr'
- *  onExit(code, { images })  images is an array of newly produced image paths
+ *  onExit(code, { images, timedOut, signal })  images: newly produced image paths
+ *  stdin: 'pipe' (interactive — the console's stdin box feeds it) or 'eof' (verification
+ *         runs: input() raises EOFError at once instead of blocking until the watchdog).
  */
-function run({ pythonPath, file, cwd, render = true, timeoutMs = 0, onData, onExit }) {
+function run({ pythonPath, file, cwd, render = true, timeoutMs = 0, stdin = 'pipe', onData, onExit }) {
   const workdir = cwd || path.dirname(file);
   clearHarnessImages(workdir);
   // Small backward buffer guards against clock/mtime granularity at run start.
@@ -168,7 +220,7 @@ function run({ pythonPath, file, cwd, render = true, timeoutMs = 0, onData, onEx
   }
 
   const args = harnessPath ? ['-u', harnessPath, file] : ['-u', file];
-  const proc = spawn(pythonPath, args, { cwd: workdir, stdio: ['pipe', 'pipe', 'pipe'] });
+  const proc = spawn(pythonPath, args, { cwd: workdir, stdio: [stdin === 'eof' ? 'ignore' : 'pipe', 'pipe', 'pipe'] });
 
   // Idle + CPU watchdog. A genuine hang (a blocking input() with no stdin, a deadlock, or a
   // silent infinite loop) must not freeze the agent's verification run forever — but a program
@@ -221,11 +273,11 @@ function run({ pythonPath, file, cwd, render = true, timeoutMs = 0, onData, onEx
     idleTimer = setTimeout(onIdle, timeoutMs);
   };
 
-  const finish = (code, images) => {
+  const finish = (code, images, signal) => {
     if (settled) return; // guard against error+exit double-fire
     settled = true;
     clearTimers();
-    onExit && onExit(code, { images });
+    onExit && onExit(code, { images, timedOut, signal: signal || null });
   };
 
   // Any output means the program is alive and doing work — reset the idle countdown.
@@ -235,11 +287,11 @@ function run({ pythonPath, file, cwd, render = true, timeoutMs = 0, onData, onEx
     onData && onData('stderr', `Failed to launch ${pythonPath}: ${err.message}\n`);
     finish(-1, []);
   });
-  proc.on('exit', (code) => {
+  proc.on('exit', (code, signal) => {
     if (harnessPath) { try { fs.unlinkSync(harnessPath); } catch (_) { /* ignore */ } }
     const images = imagesModifiedSince(workdir, runStart);
     // A SIGTERM/SIGKILL surfaces as code null; report a sentinel so the caller can tell.
-    finish(timedOut ? (code == null ? 124 : code) : code, images);
+    finish(timedOut ? (code == null ? 124 : code) : code, images, signal);
   });
 
   // Start the idle countdown now: a program that emits NO output at all (blocks on input()
@@ -248,8 +300,8 @@ function run({ pythonPath, file, cwd, render = true, timeoutMs = 0, onData, onEx
 
   return {
     pid: proc.pid,
-    write: (input) => { try { proc.stdin.write(input); } catch (_) { /* closed */ } },
-    closeStdin: () => { try { proc.stdin.end(); } catch (_) { /* ignore */ } },
+    write: (input) => { try { if (proc.stdin) proc.stdin.write(input); } catch (_) { /* closed */ } },
+    closeStdin: () => { try { if (proc.stdin) proc.stdin.end(); } catch (_) { /* ignore */ } },
     kill: () => { clearTimers(); try { proc.kill('SIGTERM'); } catch (_) { /* ignore */ } },
   };
 }
@@ -304,6 +356,38 @@ const IMPORT_TO_PKG = KNOWN_LIBS.reduce((m, [imp, dist]) => { m[imp] = dist; ret
 function pkgForImport(name) {
   const top = String(name || '').split('.')[0];
   return IMPORT_TO_PKG[top] || top;
+}
+
+// Packages the agent may install on its own when a generated program needs one: widely
+// used, reasonably small, and keyed by exact import name. Deliberately an allowlist — a
+// small model sometimes imports a module that does not exist (or one whose PyPI namesake
+// is unrelated or malicious), so an unknown name is never installed automatically. Heavy
+// frameworks (torch, tensorflow, jax, transformers) are left to the one-click prompt.
+const AUTO_INSTALL = {
+  numpy: 'numpy', pandas: 'pandas', matplotlib: 'matplotlib', mpl_toolkits: 'matplotlib',
+  scipy: 'scipy', sklearn: 'scikit-learn', seaborn: 'seaborn', sympy: 'sympy',
+  networkx: 'networkx', PIL: 'Pillow', requests: 'requests', bs4: 'beautifulsoup4',
+  yaml: 'PyYAML', tqdm: 'tqdm', statsmodels: 'statsmodels', plotly: 'plotly',
+  tabulate: 'tabulate', rich: 'rich', openpyxl: 'openpyxl', xlrd: 'xlrd',
+  dotenv: 'python-dotenv', joblib: 'joblib', polars: 'polars', pyarrow: 'pyarrow',
+  lxml: 'lxml', click: 'click', colorama: 'colorama', termcolor: 'termcolor',
+  psutil: 'psutil', imageio: 'imageio', h5py: 'h5py', pytz: 'pytz', dateutil: 'python-dateutil',
+  skimage: 'scikit-image', cv2: 'opencv-python', nltk: 'nltk', xgboost: 'xgboost',
+  lightgbm: 'lightgbm', numba: 'numba', shapely: 'shapely', faker: 'Faker',
+  pydantic: 'pydantic', toml: 'toml', wordcloud: 'wordcloud', sounddevice: 'sounddevice',
+};
+
+// The pip package to auto-install for a missing import, or null when it must not be.
+function autoInstallPkg(moduleName) {
+  const top = String(moduleName || '').split('.')[0];
+  return Object.prototype.hasOwnProperty.call(AUTO_INSTALL, top) ? AUTO_INSTALL[top] : null;
+}
+
+// A real, well-known package (installable by name) as opposed to an unknown module name.
+function isKnownPackage(moduleName) {
+  const top = String(moduleName || '').split('.')[0];
+  return !!autoInstallPkg(top) || KNOWN_LIBS.some(([imp]) => imp === top) ||
+    Object.prototype.hasOwnProperty.call(IMPORT_TO_PKG, top);
 }
 
 // Parse a ModuleNotFoundError out of stderr. Returns { module, pkg } or null.
@@ -485,5 +569,6 @@ function pipInstall({ pythonPath, spec, onData, onExit }) {
 
 module.exports = {
   compileCheck, compileCheckFiles, run, detectEnvironment, pipInstall, missingModule, pkgForImport,
+  autoInstallPkg, isKnownPackage, isSafePkgSpec,
   KNOWN_LIBS, discoverInterpreters, createVenv,
 };

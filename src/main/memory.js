@@ -113,6 +113,16 @@ class ContextMemory {
     return !this.data.summary && !this.data.facts.length && !this.data.events.length;
   }
 
+  // Only the durable facts the user pinned — the context that still applies when a brand-new
+  // program is being built. The summary and activity log describe the PREVIOUS program;
+  // feeding them into a fresh build pulled a small model toward rebuilding the old one.
+  renderFacts() {
+    if (!this.data.facts.length) return '';
+    let block = this.data.facts.slice(-MAX_FACTS).map((f) => `- ${f}`).join('\n');
+    if (block.length > MAX_RENDER_CHARS) block = block.slice(0, MAX_RENDER_CHARS - 1) + '…';
+    return 'PROJECT FACTS (pinned for this project — follow them):\n' + block;
+  }
+
   // Compact, token-bounded block injected into model prompts. Returns '' when empty
   // so cold starts carry no noise.
   render() {

@@ -65,9 +65,16 @@ function webUrl(remoteUrl) {
   return u;
 }
 
+// git reports the symlink-RESOLVED toplevel (macOS: /var -> /private/var, or a symlinked
+// projects folder), so both sides are resolved before comparing — otherwise a real repo
+// rooted at the project reads as "not a repo".
 function samePath(a, b) {
-  const left = path.resolve(String(a || ''));
-  const right = path.resolve(String(b || ''));
+  const real = (p) => {
+    const abs = path.resolve(String(p || ''));
+    try { return fs.realpathSync.native(abs); } catch (_) { return abs; }
+  };
+  const left = real(a);
+  const right = real(b);
   return process.platform === 'win32' ? left.toLowerCase() === right.toLowerCase() : left === right;
 }
 

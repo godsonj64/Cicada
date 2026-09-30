@@ -32,9 +32,8 @@ leaving your machine.**
 TRy Cicada for free https://cicada.ai.studio/
 
 Instead of a single prompt-to-code shot, Cicada runs your request through a **six-stage agentic
-pipeline** (evaluate → design → generate → review → fix → run) built as a
-[LangGraph](https://langchain-ai.github.io/langgraphjs/) state graph, with the two repair
-loops as subgraphs — so the output is not just
+pipeline** (evaluate → design → generate → fix → run → review) with a problem-aware repair
+loop — so the output is not just
 plausible-looking code but code that has been review-checked, compile-checked, and actually
 executed — with plots and output rendered back in the UI.
 
@@ -69,8 +68,8 @@ bar).
 - 🔒 **100% local & offline** — inference runs through `llama-server` on `127.0.0.1`; your code, prompts, and data are never uploaded. (The only exception: the optional first-run signup — see [Signup & telemetry](#signup--telemetry).)
 - 🚀 **Zero-setup first run** — if no `llama-server` is found, Cicada auto-downloads a prebuilt llama.cpp release for your platform, unzips it, and configures itself.
 - 🪟 **Native-feeling window** — a themed, frameless title bar with its own minimize/maximize/close controls (matching the app body) on Windows and Linux; macOS keeps its traffic lights.
-- 🧠 **Agentic, not one-shot** — a six-stage pipeline reviews, compiles, and runs the code it writes.
-- 🩺 **Problem-aware repair** — every failure is fingerprinted and every fix attempt recorded, so a repair is told what has already been tried and why it failed instead of blindly retrying. When the same failure survives repeated attempts the loop concedes rather than burning the budget on a dead end.
+- 🧠 **Agentic, not one-shot** — a six-stage pipeline compiles, runs, repairs, and then reviews the code it writes against its real output.
+- 🩺 **Problem-aware repair** — every failure is fingerprinted and every fix attempt recorded, so a repair is told what has already been tried and why it failed instead of blindly retrying. Each repair gets a precise report (the error, the file and line, and hints such as the missing import or the real signature of the function being called). When the same failure survives repeated attempts the loop concedes, and it never leaves your code worse than the best version it verified.
 - 📝 **Plain English → executed Python** — describe it, get runnable output, plots, and stdout/stderr.
 - 🗂️ **Single file or a real repo** — generate one `main.py` or a full multi-file project.
 - ✂️ **⌘K Edit Selection** — agentic inpainting that rewrites only the lines you select, safely.
@@ -96,10 +95,21 @@ User prompt
    -> Evaluate        (goal, inputs, outputs, constraints, edge cases)
    -> System Design   (approach, functions, data flow, libraries)
    -> Generate Code   (one self-contained main.py, OR a multi-file project — your choice)
-   -> Review          (concrete correctness issues)
-   -> Fix & Compile   (apply review + py_compile loop, auto-retried)
-   -> Run & Render    (execute; stream stdout/stderr; surface plots/images)
+   -> Fix & Compile   (py_compile; syntax errors repaired automatically)
+   -> Run & Render    (execute; stream stdout/stderr; surface plots/images; runtime
+                       failures repaired automatically)
+   -> Review          (the real output checked against the request; a review edit is
+                       re-run and rolled back if it breaks the working program)
 ```
+
+Verification judges a run by its result, not only its exit code: any non-zero exit is a
+failure (argparse errors included), a run that prints and writes nothing is a failure, and a
+plot request that draws no figure is a failure. Programs run with no keyboard during
+verification, so a stray `input()` fails at once instead of hanging; a program that is
+*meant* to be interactive is handed to you to run in the console instead of being "fixed".
+A common missing library (numpy, pandas, matplotlib, scikit-learn, … — an allowlist) is
+installed automatically and the run retried; heavy or unknown packages wait for you.
+Agent requests made while the model is still loading wait for it and start on their own.
 
 Each stage is a focused call to the local model. When the model emits `<think>` reasoning — as
 reasoning models do; `Qwen2.5-Coder` generally answers directly — it is separated from the answer
@@ -136,8 +146,11 @@ block.
   exactly what is importable (so it uses the real stack, with device/epoch guidance for
   deep learning), and shows it all in the **Env** dock tab grouped by category with
   versions. Anything missing installs with one click (or type any package name). When a
-  run hits a `ModuleNotFoundError`, Cicada surfaces the exact `pip install` instead of
-  wasting fix iterations on correct-but-uninstalled code.
+  run hits a `ModuleNotFoundError`, common packages are installed automatically
+  (`autoInstallDeps`, on by default); anything else is surfaced with the exact
+  `pip install` instead of wasting fix iterations on correct-but-uninstalled code. A module
+  that is neither installed nor a real package (one the model invented, or a project module
+  that is missing) is treated as the code bug it is and repaired.
 - **Document ingestion — bring your own data.** Drag &amp; drop **CSV, Excel (.xlsx/.xls),
   and JSON** anywhere in the window, or use **Add data…** in the **Data** dock tab. Each file
   is validated, copied into the project's `data/` folder, and analyzed *locally* through your
@@ -149,6 +162,7 @@ block.
   can inspect, summarize, and reason over your data — and build analytics programs, dashboards,
   reports, transformations, pipelines, visualizations, or ML workflows directly from the real
   files (e.g. drop a sales CSV, then ask for "a full sales analytics report with charts").
+- **Chat side panel** — ask about your project in a collapsible, resizable panel on the right (toggle in the top bar or ⌘⇧L; ⌘L in the editor opens it with the selected lines attached). It waits for the model to load instead of refusing, and sizes the project snapshot to the context window.
 - Console with live stdout/stderr streaming and a stdin box for interactive programs.
 - Render panel that displays any images/plots the program produces (matplotlib figures
   are auto-captured via a headless harness).
@@ -249,22 +263,30 @@ This renders the app icon from the logo SVG, then packages the app with
 ## Verify the core without the UI
 
 ```bash
-node scripts/check.js          # syntax-check all source files
-node scripts/inpaint_test.js   # deterministic splice/indent + py_compile checks (no model)
-node scripts/memory_test.js    # persistent context-memory checks (no model)
-node scripts/llm_test.js       # response parsing incl. the <think>-leak guard (no model)
-node scripts/env_test.js       # library detection + ModuleNotFoundError -> pip mapping
-node scripts/github_test.js    # GitHub integration: requirements scan, file generation, git flow (needs git, no model)
+node scripts/check.js               # syntax-check all source files
+node scripts/agent_pipeline_test.js  # the whole pipeline with a scripted model (no model needed)
+node scripts/repair_loop_test.js     # repair-loop semantics: stuck detection, budgets, never ending on a regression
+node scripts/runner_test.js          # program execution: nested imports, plot capture, stdin EOF, timeouts
+node scripts/stream_test.js          # model client: dropped streams, error frames, context overflow, stalls
+node scripts/llama_server_test.js    # llama-server lifecycle with a fake server: restart race, busy port, crash restart
+node scripts/config_test.js          # settings: GARM_HOME isolation and the one-time context-size migration
+node scripts/llm_test.js             # response parsing incl. the <think>-leak guard and fence parsing
+node scripts/inpaint_test.js         # deterministic splice/indent + py_compile checks
+node scripts/memory_test.js          # persistent context-memory checks
+node scripts/env_test.js             # library detection + ModuleNotFoundError -> pip mapping
+node scripts/github_test.js          # GitHub integration (needs git, no model)
 node scripts/headless_test.js "Print the first 10 Fibonacci numbers, one per line."
-node scripts/refine_test.js    # post-edit refine (needs the model)
-node scripts/inpaint_e2e.js    # end-to-end select-and-replace (needs the model)
-node scripts/stress_test.js    # advanced battery: heavy gen, plots, refine, inpaint (needs the model)
+node scripts/refine_test.js          # post-edit refine (needs the model)
+node scripts/inpaint_e2e.js          # end-to-end select-and-replace (needs the model)
+node scripts/stress_test.js          # advanced battery: heavy gen, plots, refine, inpaint (needs the model)
+node scripts/repo_battery.js         # multi-file (repo mode) battery: 5 realistic projects, create + refine (needs the model)
 ```
 
-`inpaint_test.js`, `memory_test.js`, and `llm_test.js` need no model and run in well
-under a second — they cover the bug-critical logic (region splicing never corrupts
-surrounding code or indentation; memory survives a reload; model reasoning never leaks
-into the generated file).
+Every `*_test.js` above except the last four needs no model; `repo_battery.js` needs it too. The model-backed scripts use
+your configured model and interpreter but always work in a **throwaway temp workspace**
+(`scripts/_e2e.js`) — they never touch your projects. Set `KEEP_WORKSPACE=1` to keep it for
+inspection. To run the whole app against a separate config and project folder, start it with
+`GARM_HOME=/some/folder npm start`.
 
 ## Project layout
 
@@ -273,7 +295,9 @@ src/main/        Electron main process
   main.js        window, IPC, run management
   llama.js       llama-server lifecycle + health
   llm.js         streaming chat client; <think>/code parsing
-  pipeline.js    agentic orchestrator: create / refine / inpaint
+  pipeline.js    agentic orchestrator: create / refine / inpaint, verification + review
+  repair-loop.js check -> repair -> check loop (budgets, stuck detection, best-version restore)
+  agent-memory.js problem ledger: failure fingerprints + attempted fixes (.garm/problems.json)
   splice.js      pure region-splice + re-indent helpers (inpaint safety)
   memory.js      persistent context memory (workspace/.garm/memory.json)
   llama-installer.js  first-run auto-download of a prebuilt llama.cpp release
@@ -284,7 +308,7 @@ src/main/        Electron main process
   config.js      defaults + ~/GARM Code/config.json
   preload.js     allowlisted contextBridge API
 src/renderer/    UI (HTML/CSS + Monaco + xterm)
-scripts/         syntax check + headless / refine / inpaint / memory tests
+scripts/         syntax check, unit tests, and model-backed end-to-end scripts
 ```
 
 ## Signup & telemetry

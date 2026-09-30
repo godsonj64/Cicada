@@ -2,7 +2,7 @@
 
 // Headless test of the post-edit refine flow: seed base code, request a change,
 // confirm the change is applied and the result runs.
-const configMod = require('../src/main/config');
+const { isolatedConfig, makeRunFile, cleanup } = require('./_e2e');
 const { LlamaServer } = require('../src/main/llama');
 const { Pipeline } = require('../src/main/pipeline');
 const python = require('../src/main/python');
@@ -16,18 +16,17 @@ if __name__ == "__main__":
 `;
 const CHANGE = process.argv.slice(2).join(' ') || 'Also print the total sum of the numbers at the end, labelled "sum:".';
 
-const config = { ...configMod.load(), maxTokens: 900, maxFixIterations: 1 };
+// A throwaway workspace: never the user's active project.
+const config = isolatedConfig({ maxTokens: 900, maxFixIterations: 1 });
 
-function runFile(file) {
-  return new Promise((resolve) => {
-    console.log('\n--- RUN OUTPUT ---');
-    // stderr must be returned as main.js does, or the runtime-repair loop can never see a
-    // traceback and the whole self-healing path goes untested.
-    let stderr = '';
-    python.run({ pythonPath: config.pythonPath, file, cwd: config.workspaceDir, render: true,
-      onData: (s, t) => { if (s === 'stderr') stderr += t; process.stdout.write(t); },
-      onExit: (code, { images }) => { console.log(`--- exit ${code}, images=${images.length} ---`); resolve({ code, images, stderr }); } });
-  });
+// Returns stderr/stdout exactly as main.js does, or the runtime-repair loop can never see
+// a traceback and the whole self-healing path goes untested.
+const runOnce = makeRunFile(config);
+async function runFile(file, opts) {
+  console.log('\n--- RUN OUTPUT ---');
+  const r = await runOnce(file, opts);
+  console.log(`--- exit ${r.code}, images=${r.images.length} ---`);
+  return r;
 }
 
 (async () => {
@@ -53,6 +52,7 @@ function runFile(file) {
   await pipeline.refine(CHANGE, BASE);
   console.log('\n--- FINAL REFINED CODE ---\n' + finalCode);
   console.log('\nContains a sum? ' + /sum/i.test(finalCode));
-  llama.stop();
-  setTimeout(() => process.exit(0), 800);
+  await llama.stop();
+  cleanup(config);
+  setTimeout(() => process.exit(0), 200);
 })().catch((e) => { console.error(e); process.exit(1); });

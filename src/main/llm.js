@@ -6,11 +6,34 @@
 // a separate reasoning_content field (hosted providers), or with the opening tag supplied
 // by the chat template rather than the model — splitThinking handles all three.
 
+// How long a stream may go without receiving a single byte before it is treated as hung.
+// Generous on purpose: llama-server sends nothing while it processes a long prompt, and a
+// CPU-only build can take minutes over a large one. Without any limit, though, a wedged
+// server froze the agent forever.
+const STREAM_IDLE_MS = 5 * 60 * 1000;
+
+// The prompt does not fit the model's context window. llama-server reports the exact token
+// counts (exceed_context_size_error); hosted providers only say "maximum context length".
+// Tagged so callers can trim the prompt and retry instead of failing the whole run.
+function contextOverflowError(status, detail, info) {
+  const e = new Error(`LLM request failed (${status}): ${detail}`);
+  e.status = status;
+  e.code = 'context_overflow';
+  if (info && Number.isFinite(info.n_prompt_tokens)) e.nPrompt = info.n_prompt_tokens;
+  if (info && Number.isFinite(info.n_ctx)) e.nCtx = info.n_ctx;
+  return e;
+}
+
+function isOverflow(err, detail) {
+  return !!((err && err.type === 'exceed_context_size_error') ||
+    /exceeds the available context size|maximum context length|context length exceeded|too many tokens/i.test(detail || ''));
+}
+
 /**
  * Stream a chat completion. Calls onDelta(textChunk) for each token delta.
  * Returns the full concatenated content. `signal` is an AbortSignal.
  */
-async function streamChat(baseUrl, { messages, temperature, topP, maxTokens, signal, onDelta, onMeta, apiKey, model }) {
+async function streamChat(baseUrl, { messages, temperature, topP, maxTokens, signal, onDelta, onMeta, apiKey, model, idleTimeoutMs }) {
   const headers = { 'Content-Type': 'application/json' };
   // Hosted providers (DeepSeek) need a bearer token + an explicit model id; the local
   // llama-server needs neither (it serves whatever GGUF is loaded).
@@ -24,50 +47,81 @@ async function streamChat(baseUrl, { messages, temperature, topP, maxTokens, sig
   };
   if (model) body.model = model;
 
-  const res = await fetch(`${baseUrl}/v1/chat/completions`, {
-    method: 'POST',
-    headers,
-    body: JSON.stringify(body),
-    signal,
-  });
+  // Our own controller, chained to the caller's, so the idle watchdog can abort a stalled
+  // request without the caller mistaking it for a user cancel.
+  const ctl = new AbortController();
+  const onAbort = () => ctl.abort();
+  if (signal) { if (signal.aborted) ctl.abort(); else signal.addEventListener('abort', onAbort, { once: true }); }
+  const idleMs = idleTimeoutMs == null ? STREAM_IDLE_MS : idleTimeoutMs;
+  let stalled = false;
+  let idleTimer = null;
+  const touch = () => {
+    if (!idleMs) return;
+    if (idleTimer) clearTimeout(idleTimer);
+    idleTimer = setTimeout(() => { stalled = true; ctl.abort(); }, idleMs);
+  };
 
-  if (!res.ok || !res.body) {
-    const txt = await res.text().catch(() => '');
-    // Surface the provider's own error message (e.g. invalid/expired DeepSeek key) cleanly.
-    let detail = txt.slice(0, 300);
-    try { const j = JSON.parse(txt); if (j.error && j.error.message) detail = j.error.message; } catch (_) { /* keep raw */ }
-    throw new Error(`LLM request failed (${res.status}): ${detail}`);
-  }
+  try {
+    touch();
+    const res = await fetch(`${baseUrl}/v1/chat/completions`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(body),
+      signal: ctl.signal,
+    });
+    touch();
 
-  const reader = res.body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = '';
-  let full = '';
-  // Why the response ended: 'stop' (complete) or 'length' (hit the token cap = truncated).
-  let finishReason = null;
-  // Some providers (DeepSeek) stream chain-of-thought in a SEPARATE `reasoning_content`
-  // field instead of inline <think> tags. Re-wrap it as inline <think>…</think> so the rest
-  // of GARM (splitThinking / answerStream / extractCode and the live reasoning panel) works
-  // identically across providers.
-  let thinkOpen = false;
-  let thinkClosed = false;
-  const finish = () => { if (onMeta) onMeta({ finishReason }); };
+    if (!res.ok || !res.body) {
+      const txt = await res.text().catch(() => '');
+      // Surface the provider's own error message (e.g. invalid/expired DeepSeek key) cleanly.
+      let detail = txt.slice(0, 300);
+      let errObj = null;
+      try { const j = JSON.parse(txt); errObj = j.error || null; if (errObj && errObj.message) detail = errObj.message; } catch (_) { /* keep raw */ }
+      if (isOverflow(errObj, detail)) throw contextOverflowError(res.status, detail, errObj);
+      const e = new Error(`LLM request failed (${res.status}): ${detail}`);
+      e.status = res.status;
+      throw e;
+    }
 
-  while (true) {
-    const { value, done } = await reader.read();
-    if (done) break;
-    buffer += decoder.decode(value, { stream: true });
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    let full = '';
+    // Why the response ended: 'stop' (complete) or 'length' (hit the token cap = truncated).
+    let finishReason = null;
+    // Some providers (DeepSeek) stream chain-of-thought in a SEPARATE `reasoning_content`
+    // field instead of inline <think> tags. Re-wrap it as inline <think>…</think> so the rest
+    // of GARM (splitThinking / answerStream / extractCode and the live reasoning panel) works
+    // identically across providers.
+    let thinkOpen = false;
+    let thinkClosed = false;
+    const finish = () => { if (onMeta) onMeta({ finishReason }); };
 
-    // SSE frames are separated by double newlines; each line starts with "data: ".
-    let idx;
-    while ((idx = buffer.indexOf('\n')) >= 0) {
-      const line = buffer.slice(0, idx).trim();
-      buffer = buffer.slice(idx + 1);
-      if (!line.startsWith('data:')) continue;
-      const payload = line.slice(5).trim();
-      if (payload === '[DONE]') { finish(); return full; }
-      try {
-        const obj = JSON.parse(payload);
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      touch();
+      buffer += decoder.decode(value, { stream: true });
+
+      // SSE frames are separated by double newlines; each line starts with "data: ".
+      let idx;
+      while ((idx = buffer.indexOf('\n')) >= 0) {
+        const line = buffer.slice(0, idx).trim();
+        buffer = buffer.slice(idx + 1);
+        if (!line.startsWith('data:')) continue;
+        const payload = line.slice(5).trim();
+        if (payload === '[DONE]') { finish(); return full; }
+        let obj;
+        try { obj = JSON.parse(payload); } catch (_) { continue; /* partial frame, ignore */ }
+        // A server-side failure mid-generation arrives as an error frame; ignoring it left
+        // a silently truncated answer that looked complete.
+        if (obj && obj.error) {
+          const detail = obj.error.message || JSON.stringify(obj.error).slice(0, 300);
+          if (isOverflow(obj.error, detail)) throw contextOverflowError(obj.error.code || 500, detail, obj.error);
+          const e = new Error('LLM stream error: ' + detail);
+          e.transient = true;
+          throw e;
+        }
         const choice = obj.choices?.[0];
         if (choice?.finish_reason) finishReason = choice.finish_reason;
         const d = choice?.delta || {};
@@ -84,11 +138,29 @@ async function streamChat(baseUrl, { messages, temperature, topP, maxTokens, sig
           full += chunk;
           if (onDelta) onDelta(chunk);
         }
-      } catch (_) { /* partial frame, ignore */ }
+      }
     }
+    // The connection closed without [DONE] or a finish_reason: the server died or dropped
+    // us mid-answer. Returning `full` here passed off a truncated answer as complete, so
+    // report it as a transient failure and let the caller retry.
+    if (!finishReason) {
+      const e = new Error('LLM stream terminated before the answer was complete');
+      e.transient = true;
+      throw e;
+    }
+    finish();
+    return full;
+  } catch (err) {
+    if (stalled && !(signal && signal.aborted)) {
+      const e = new Error(`LLM stream stalled — no data from the model for ${Math.round(idleMs / 1000)}s`);
+      e.transient = true;
+      throw e;
+    }
+    throw err;
+  } finally {
+    if (idleTimer) clearTimeout(idleTimer);
+    if (signal) signal.removeEventListener('abort', onAbort);
   }
-  finish();
-  return full;
 }
 
 // ---- Resilience ----------------------------------------------------------------
@@ -102,6 +174,8 @@ async function streamChat(baseUrl, { messages, temperature, topP, maxTokens, sig
 // overload) statuses. 4xx (bad key, bad request) and aborts are NOT transient.
 function isTransientLlmError(err) {
   if (!err || err.name === 'AbortError') return false;
+  if (err.code === 'context_overflow') return false; // retrying the same prompt cannot help
+  if (err.transient) return true;
   const msg = String(err.message || '');
   if (/fetch failed|ECONNREFUSED|ECONNRESET|EPIPE|ETIMEDOUT|socket hang up|network|terminated|aborted prematurely/i.test(msg)) return true;
   const m = msg.match(/LLM request failed \((\d{3})\)/);
@@ -191,39 +265,111 @@ function isMeaningfulCode(src) {
   return false;
 }
 
+// ---- Fenced-block parsing -----------------------------------------------------
+//
+// One line-based parser behind every extractor. The old regexes only recognised
+// ```python / ```py / ``` openers, so any other info string broke pairing: a reply that
+// showed a ```bash install line before the code paired the bash block's CLOSING fence with
+// the python block's OPENING one and returned the prose in between ("Then:") as the
+// program, and a ```python3 fence wrote the backticks themselves into main.py.
+
+const PY_LANGS = new Set(['', 'python', 'py', 'python3', 'py3', 'ipython']);
+
+// Split text into fenced blocks: [{ info, lang, body, closed, before }]. A fence opens on a
+// line starting with ``` plus an optional info string, and closes on a bare ``` line — or
+// on ``` glued to the end of the last code line, which small models often emit. `before`
+// is the prose between the previous block and this one (where path labels live). An
+// unclosed final block (the model was cut off) is returned with closed:false.
+function parseFences(text) {
+  const lines = String(text == null ? '' : text).split('\n');
+  const blocks = [];
+  let cur = null;
+  let prose = [];
+  const open = (info) => {
+    cur = { info: info.trim(), lang: (info.trim().split(/\s+/)[0] || '').toLowerCase(), lines: [], closed: false, before: prose.join('\n') };
+    prose = [];
+  };
+  for (let raw of lines) {
+    raw = raw.replace(/\r$/, '');
+    if (!cur) {
+      const m = raw.match(/^\s*`{3,}\s*([^`]*)$/);
+      if (m) open(m[1]); else prose.push(raw);
+      continue;
+    }
+    if (/^\s*`{3,}\s*$/.test(raw)) { cur.closed = true; blocks.push(cur); cur = null; continue; }
+    // A new ```python opener while a block is still open: the model abandoned the first
+    // block (never closed it) and started again. Keep the abandoned one as unclosed.
+    const reopen = raw.match(/^\s*`{3,}\s*(python3?|py3?)\s*$/i);
+    if (reopen) { blocks.push(cur); open(reopen[1]); continue; }
+    const glued = raw.match(/^(.*\S)\s*`{3,}\s*$/);
+    if (glued && !/`{3}/.test(glued[1])) { cur.lines.push(glued[1]); cur.closed = true; blocks.push(cur); cur = null; continue; }
+    cur.lines.push(raw);
+  }
+  if (cur) blocks.push(cur);
+  return blocks.map((b) => ({ info: b.info, lang: b.lang, body: b.lines.join('\n'), closed: b.closed, before: b.before }));
+}
+
+// A block that holds Python: an untagged/python fence, or one labelled with a .py path.
+function isPythonBlock(b) {
+  if (PY_LANGS.has(b.lang)) return true;
+  if (/\.pyw?$/i.test(b.lang)) return true;
+  return /\bpath=\S+\.py\b/i.test(b.info);
+}
+
+// Strip leading blank lines and trailing whitespace, but NOT the first line's indentation:
+// an Edit Selection answer for a region inside a function starts indented, and trimming it
+// left the first line at column 0 while the rest kept their indent, so re-indenting the
+// splice produced an IndentationError on every such edit.
+function tidyBody(body) {
+  return String(body).replace(/^(?:[ \t]*\n)+/, '').replace(/\s+$/, '');
+}
+
+// Does unfenced text read like a Python program rather than prose? The old test accepted
+// anything containing "for " or "=", so a chatty reply ("First, for the loop we need a
+// counter = 0.") was written to main.py as code.
+const CODE_LINE = new RegExp([
+  '^\\s*(?:#|@|def |class |import |from \\S+ import |if |elif |else:|for |while |try:|except\\b|finally:|with |return\\b|yield\\b|raise\\b|pass\\b|break\\b|continue\\b|print\\(|assert |async |await |global |nonlocal |del )',
+  '^\\s*[A-Za-z_][\\w.]*(?:\\[[^\\]]*\\])?(?:\\s*,\\s*[A-Za-z_][\\w.]*)*\\s*(?:=|\\+=|-=|\\*=|/=)(?!=)',
+  '^\\s*[A-Za-z_][\\w.]*\\(.*\\)\\s*$',
+  '^\\s+\\S',
+  '^\\s*[\\)\\]\\}]',
+].join('|'));
+
+function looksLikePython(text) {
+  const lines = String(text || '').split('\n').filter((l) => l.trim());
+  if (!lines.length || !CODE_LINE.test(lines[0])) return false;
+  const code = lines.filter((l) => CODE_LINE.test(l)).length;
+  return code / lines.length >= 0.7;
+}
+
 /**
- * Extract Python source from a model answer. Prefers the last fenced ```python block that
+ * Extract Python source from a model answer. Prefers the last complete Python fence that
  * actually contains code; treats a placeholder-only or unclosed (truncated) block as "no
- * code" so a stub is never written to disk; otherwise falls back to raw code-looking text.
+ * code" so a stub is never written to disk; otherwise accepts unfenced text only when it
+ * genuinely reads as Python.
  */
 function extractCode(answer) {
   if (!answer) return '';
   // Never let reasoning leak in as "code". Drop any complete <think>…</think> blocks
   // first, then look for a fenced block.
   const text = answer.replace(/<think>[\s\S]*?<\/think>/gi, '');
-  const fences = [...text.matchAll(/```(?:python|py)?\s*\n([\s\S]*?)```/gi)];
-  if (fences.length) {
-    // Prefer the last fence with real code. A truncated run can leave a small complete
-    // placeholder (`# code`) before the real, unclosed block — never let that win.
-    for (let i = fences.length - 1; i >= 0; i--) {
-      const body = fences[i][1].trim();
-      if (isMeaningfulCode(body)) return body;
+  const blocks = parseFences(text);
+  if (blocks.length) {
+    // Prefer the last closed Python fence with real code. A truncated run can leave a
+    // small complete placeholder (`# code`) before the real, unclosed block — never let
+    // that win — and a later truncated block must not displace an earlier complete one.
+    for (let i = blocks.length - 1; i >= 0; i--) {
+      const b = blocks[i];
+      if (b.closed && isPythonBlock(b) && isMeaningfulCode(b.body)) return tidyBody(b.body);
     }
+    // Only non-Python blocks, placeholders, or a block cut off mid-program: no code.
     return '';
   }
-  // A fence was opened but never closed → the model was cut off mid-program. Don't write
-  // the raw ```python marker to disk as if it were code; report no code so the caller
-  // can fail loudly or retry.
-  if (/```(?:python|py)?[ \t]*\r?\n/i.test(text)) return '';
   // An unclosed <think> with no fenced block means the model ran out of tokens mid-
   // thought and never produced code — returning the raw reasoning here would write a
   // <think> dump to disk (it often mentions `def`/`import`), so treat it as no code.
   if (/<think>/i.test(text)) return '';
-  // No fences and no reasoning: if it parses like code (has def/import/print), use it.
-  if (/\b(def |import |print\(|class |for |while |=)/.test(text)) {
-    return text.trim();
-  }
-  return '';
+  return looksLikePython(text) ? tidyBody(text) : '';
 }
 
 /**
@@ -245,15 +391,14 @@ function answerStream(text) {
  */
 function extractCodeStreaming(text) {
   if (!text) return '';
-  const re = /```(?:python|py)?[ \t]*\r?\n/gi;
-  let lastEnd = -1;
-  let m;
-  while ((m = re.exec(text)) !== null) lastEnd = re.lastIndex;
-  if (lastEnd < 0) return '';
-  let rest = text.slice(lastEnd);
-  const close = rest.indexOf('```');
-  if (close >= 0) rest = rest.slice(0, close);
-  return rest;
+  // Only Python blocks count, so an install snippet (```bash) shown before the code is not
+  // streamed into the editor. An opener still arriving ("```pyt") parses as a non-Python
+  // block and is skipped until its line completes.
+  const blocks = parseFences(text).filter((b) => isPythonBlock(b));
+  if (!blocks.length) return '';
+  const b = blocks[blocks.length - 1];
+  // Hide a closing fence that is still arriving ("`", "``") on the last line.
+  return b.closed ? b.body : b.body.replace(/\n?[ \t]*`{1,3}$/, (m) => (m.startsWith('\n') ? '\n' : ''));
 }
 
 // ---- Multi-file ("repo") extraction ------------------------------------------
@@ -320,19 +465,20 @@ function labelFromBefore(before) {
 function extractFiles(answer) {
   if (!answer) return [];
   const text = String(answer).replace(/<think>[\s\S]*?<\/think>/gi, '');
-  const re = /```[ \t]*([^\n`]*)\r?\n([\s\S]*?)```/g;
-  const raw = [];
-  let m, last = 0;
-  while ((m = re.exec(text)) !== null) {
-    const before = text.slice(last, m.index);
-    last = re.lastIndex;
-    raw.push({ path: pathFromInfo(m[1]) || labelFromBefore(before), body: m[2].replace(/\s+$/, '') });
-  }
+  // Only complete blocks can become files: a truncated trailing file (unclosed fence) is
+  // dropped rather than written half-finished.
+  const raw = parseFences(text)
+    .filter((b) => b.closed)
+    .map((b) => ({ path: pathFromInfo(b.info) || labelFromBefore(b.before), body: b.body.replace(/\s+$/, ''), python: isPythonBlock(b) }));
+  // A lone unlabeled Python block is the entry point, so repo mode degrades gracefully to a
+  // single file — even when the reply also shows, say, an unlabeled ```bash install line.
+  const unlabeledPy = raw.filter((b) => !b.path && b.python);
+  const loneEntry = !raw.some((b) => b.path) && unlabeledPy.length === 1 ? unlabeledPy[0] : null;
   const out = [];
   const seen = new Map(); // path -> index in out
   for (const blk of raw) {
     let p = blk.path;
-    if (!p) { if (raw.length === 1) p = 'main.py'; else continue; }
+    if (!p) { if (blk === loneEntry) p = 'main.py'; else continue; }
     let body = blk.body;
     // An empty __init__.py is an intentional package marker — keep it. Any OTHER empty
     // block is truncation/noise, and a placeholder-only Python block (comments only) must
@@ -402,5 +548,5 @@ function extractFilesStreaming(text) {
 module.exports = {
   streamChat, streamChatResilient, isTransientLlmError, waitForServer,
   splitThinking, extractCode, extractCodeStreaming, answerStream, isMeaningfulCode,
-  extractFiles, extractFilesStreaming, pickEntry, looksLikePath,
+  extractFiles, extractFilesStreaming, pickEntry, looksLikePath, parseFences, looksLikePython,
 };

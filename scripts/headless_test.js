@@ -4,34 +4,30 @@
 // starts llama-server, runs the pipeline on a small request, executes the result.
 
 const path = require('path');
-const configMod = require('../src/main/config');
+const { isolatedConfig, makeRunFile, cleanup } = require('./_e2e');
 const { LlamaServer } = require('../src/main/llama');
 const { Pipeline } = require('../src/main/pipeline');
 const python = require('../src/main/python');
 
 const REQUEST = process.argv.slice(2).join(' ') || 'Print the first 10 Fibonacci numbers, one per line.';
 
-const config = {
-  ...configMod.load(),
+// A throwaway workspace: never the user's active project.
+const config = isolatedConfig({
   maxTokens: 900,        // keep the test snappy
   maxFixIterations: 2,
-};
+});
 
 function shorten(s, n = 240) {
   s = (s || '').replace(/\s+/g, ' ').trim();
   return s.length > n ? s.slice(0, n) + '…' : s;
 }
 
-function runFile(file) {
-  return new Promise((resolve) => {
-    console.log('\n--- RUN OUTPUT ---');
-    let stderr = '';
-    python.run({
-      pythonPath: config.pythonPath, file, cwd: config.workspaceDir, render: true,
-      onData: (stream, text) => { if (stream === 'stderr') stderr += text; process.stdout.write(text); },
-      onExit: (code, { images }) => { console.log(`--- exit ${code}, images=${images.length} ---`); resolve({ code, images, stderr }); },
-    });
-  });
+const runOnce = makeRunFile(config);
+async function runFile(file, opts) {
+  console.log('\n--- RUN OUTPUT ---');
+  const r = await runOnce(file, opts);
+  console.log(`--- exit ${r.code}, images=${r.images.length} ---`);
+  return r;
 }
 
 (async () => {
@@ -58,6 +54,7 @@ function runFile(file) {
   await pipeline.run(REQUEST);
   console.log(`\nTotal time: ${((Date.now() - t0) / 1000).toFixed(1)}s`);
   console.log('\n--- FINAL CODE ---\n' + (seen.code || '(none)'));
-  llama.stop();
-  setTimeout(() => process.exit(0), 1000);
+  await llama.stop();
+  cleanup(config);
+  setTimeout(() => process.exit(0), 200);
 })().catch((e) => { console.error(e); process.exit(1); });

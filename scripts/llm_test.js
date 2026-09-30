@@ -40,6 +40,25 @@ ok('a lone unclosed fence (truncated mid-program) yields no code',
 ok('isMeaningfulCode: comment-only is not code', isMeaningfulCode('# code\n  # more') === false);
 ok('isMeaningfulCode: a real statement is code', isMeaningfulCode('# c\nx = 1') === true);
 
+console.log('extractCode — fence parsing regressions');
+// A ```bash block before the code used to pair the bash block's CLOSING fence with the
+// python block's OPENING one, and the prose between them ("Then:") became main.py.
+ok('an install snippet before the code does not hijack extraction',
+  extractCode('Install:\n```bash\npip install numpy\n```\n\nThen:\n```python\nimport numpy as np\nprint(np.ones(2))\n```') === 'import numpy as np\nprint(np.ones(2))');
+ok('```python3 fences are recognised (backticks never reach the file)', extractCode('```python3\nprint(1)\nx = 2\n```') === 'print(1)\nx = 2');
+ok('```Python (capitalised) fences are recognised', extractCode('```Python\nprint(1)\n```') === 'print(1)');
+ok('a closing fence glued to the last line still closes', extractCode('```python\nx = 1\nprint(x)```') === 'x = 1\nprint(x)');
+ok('a non-python block alone is not code', extractCode('```json\n{"a": 1}\n```') === '');
+ok('a later truncated block does not displace an earlier complete one',
+  extractCode('```python\nprint("done")\n```\nImproved:\n```python\nimport os\nprint(os.getc') === 'print("done")');
+// Edit Selection regions inside a function arrive indented. Trimming the first line's
+// indent (but not the others') made every such splice an IndentationError.
+ok('the first line keeps its indentation', extractCode('```python\n    total = sum(items)\n    return total\n```') === '    total = sum(items)\n    return total');
+ok('chatty prose is never written as code', extractCode('Sure! First, for the loop we need a counter = 0.') === '');
+ok('unfenced real code is still accepted', extractCode('import math\nprint(math.pi)') === 'import math\nprint(math.pi)');
+ok('streaming ignores an install snippet', extractCodeStreaming('```bash\npip install x\n```\n```python\nimport x\npri') === 'import x\npri');
+ok('streaming hides a closing fence still arriving', extractCodeStreaming('```python\nx = 1\n``') === 'x = 1\n');
+
 console.log('splitThinking');
 const st = splitThinking('<think>reasoning here</think>\nfinal answer');
 ok('separates closed think from answer', st.thinking === 'reasoning here' && st.answer === 'final answer');

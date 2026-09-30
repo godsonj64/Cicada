@@ -3,6 +3,7 @@
 const { spawn, spawnSync } = require('child_process');
 const { EventEmitter } = require('events');
 const fs = require('fs');
+const net = require('net');
 const path = require('path');
 
 // Common locations for the llama.cpp server binary (Homebrew on Apple Silicon / Intel,
@@ -42,21 +43,48 @@ function resolveBinary(explicitPath) {
   return null;
 }
 
+// Is `port` free to bind on 127.0.0.1?
+function portFree(port) {
+  return new Promise((resolve) => {
+    const srv = net.createServer();
+    srv.once('error', () => resolve(false));
+    srv.once('listening', () => srv.close(() => resolve(true)));
+    srv.listen(port, '127.0.0.1');
+  });
+}
+
+// The configured port, or the next free one after it. A port held by something else —
+// often a llama-server orphaned by an earlier crash — used to make every start fail with a
+// bind error until the user found and changed the port by hand.
+async function pickPort(preferred) {
+  for (let p = preferred; p < preferred + 20; p++) {
+    if (await portFree(p)) return p;
+  }
+  return preferred;
+}
+
+// How long to wait for a model to finish loading while the server process is alive and
+// working. A large model on a slow disk can take minutes; giving up at 2 minutes marked a
+// healthy, still-loading server as failed and invited a second copy onto the same port.
+const LOAD_TIMEOUT_MS = 10 * 60 * 1000;
+
 class LlamaServer extends EventEmitter {
   constructor(config) {
     super();
     this.config = config;
     this.proc = null;
+    this.port = config.serverPort;
     this.status = 'stopped'; // stopped | starting | ready | error
     this.binary = resolveBinary(config.llamaServerPath);
     this.lastError = null;
     this.logBuffer = [];
     // Crash timestamps for the auto-restart guard (see the exit handler in start()).
     this.crashTimes = [];
+    this._exited = null; // Promise resolved when the current process has exited
   }
 
   baseUrl() {
-    return `http://127.0.0.1:${this.config.serverPort}`;
+    return `http://127.0.0.1:${this.port || this.config.serverPort}`;
   }
 
   _setStatus(status, detail) {
@@ -72,6 +100,8 @@ class LlamaServer extends EventEmitter {
 
   async start() {
     if (this.status === 'ready' || this.status === 'starting') return;
+    // Never run two servers: a process left over from a failed start is stopped first.
+    if (this.proc) await this.stop({ keepStatus: true });
     this.binary = resolveBinary(this.config.llamaServerPath);
     if (!this.binary) {
       this.lastError = process.platform === 'win32'
@@ -87,10 +117,15 @@ class LlamaServer extends EventEmitter {
     }
 
     this._setStatus('starting', `Loading ${path.basename(this.config.modelPath)}`);
+    this.port = await pickPort(this.config.serverPort);
+    if (this.port !== this.config.serverPort) {
+      this._log(`[cicada] port ${this.config.serverPort} is in use — using ${this.port} instead`);
+    }
+    if (this.status !== 'starting') return; // stopped while we were choosing a port
     const args = [
       '-m', this.config.modelPath,
       '--host', '127.0.0.1',
-      '--port', String(this.config.serverPort),
+      '--port', String(this.port),
       '-c', String(this.config.contextSize),
       // GPU offload. -ngl 99 offloads all layers when a GPU backend (CUDA/Metal) is
       // active; with a CPU-only llama.cpp build the flag is simply ignored. The backend is
@@ -105,17 +140,23 @@ class LlamaServer extends EventEmitter {
     ];
     this._log(`$ ${this.binary} ${args.join(' ')}`);
 
-    this.proc = spawn(this.binary, args, { stdio: ['ignore', 'pipe', 'pipe'] });
+    const proc = spawn(this.binary, args, { stdio: ['ignore', 'pipe', 'pipe'] });
+    this.proc = proc;
+    this._exited = new Promise((resolve) => { proc.once('exit', resolve); proc.once('error', resolve); });
 
     const onData = (buf) => {
       const text = buf.toString();
       text.split(/\r?\n/).forEach((l) => { if (l.trim()) this._log(l); });
     };
-    this.proc.stdout.on('data', onData);
-    this.proc.stderr.on('data', onData);
+    proc.stdout.on('data', onData);
+    proc.stderr.on('data', onData);
 
-    this.proc.on('exit', (code, signal) => {
+    proc.on('exit', (code, signal) => {
       this._log(`llama-server exited (code=${code}, signal=${signal})`);
+      // Only the CURRENT process may change state. A process being replaced (restart after
+      // a settings change) exits after its successor has started; acting on that exit
+      // nulled the new process and read as a crash, spawning yet another server.
+      if (this.proc !== proc) return;
       this.proc = null;
       if (this.status !== 'stopped') {
         // Unexpected exit (a crash, an OOM kill, a driver hiccup). Self-heal: restart
@@ -139,25 +180,28 @@ class LlamaServer extends EventEmitter {
         }
       }
     });
-    this.proc.on('error', (err) => {
+    proc.on('error', (err) => {
+      if (this.proc !== proc) return;
       this.lastError = err.message;
       this._setStatus('error', err.message);
     });
 
-    // Poll health until ready or timeout.
-    const ready = await this._waitForHealth(120000);
+    // Poll health until ready, the process dies, or loading takes unreasonably long.
+    const ready = await this._waitForHealth(proc, LOAD_TIMEOUT_MS);
+    if (this.proc !== proc) return; // replaced or stopped meanwhile
     if (ready) {
       this._setStatus('ready', this.baseUrl());
     } else if (this.status !== 'error') {
-      this.lastError = 'Timed out waiting for model to load.';
+      this.lastError = 'Timed out waiting for the model to load.';
+      await this.stop({ keepStatus: true });
       this._setStatus('error', this.lastError);
     }
   }
 
-  async _waitForHealth(timeoutMs) {
+  async _waitForHealth(proc, timeoutMs) {
     const deadline = Date.now() + timeoutMs;
     while (Date.now() < deadline) {
-      if (this.status === 'error' || !this.proc) return false;
+      if (this.proc !== proc || this.status === 'error' || this.status === 'stopped') return false;
       try {
         const res = await fetch(`${this.baseUrl()}/health`, { method: 'GET' });
         if (res.ok) return true;
@@ -167,21 +211,25 @@ class LlamaServer extends EventEmitter {
     return false;
   }
 
-  stop() {
-    this._setStatus('stopped');
-    if (this.proc) {
-      const p = this.proc;
-      this.proc = null;
-      try { p.kill('SIGTERM'); } catch (_) { /* ignore */ }
-      // Hard kill shortly after if it lingers.
-      setTimeout(() => { try { p.kill('SIGKILL'); } catch (_) { /* ignore */ } }, 1500);
-    }
+  // Stop the server. Resolves once the process has actually exited (escalating to SIGKILL),
+  // so a restart never races the old process for the port or the GPU memory.
+  stop(opts) {
+    if (!(opts && opts.keepStatus)) this._setStatus('stopped');
+    const p = this.proc;
+    const exited = this._exited;
+    this.proc = null;
+    this._exited = null;
+    if (!p) return Promise.resolve();
+    try { p.kill('SIGTERM'); } catch (_) { /* ignore */ }
+    // Hard kill shortly after if it lingers.
+    const hard = setTimeout(() => { try { p.kill('SIGKILL'); } catch (_) { /* ignore */ } }, 1500);
+    const limit = new Promise((r) => setTimeout(r, 4000));
+    return Promise.race([exited || Promise.resolve(), limit]).then(() => clearTimeout(hard));
   }
 
   async restart(newConfig) {
     if (newConfig) this.config = newConfig;
-    this.stop();
-    await new Promise((r) => setTimeout(r, 800));
+    await this.stop();
     await this.start();
   }
 
@@ -190,10 +238,11 @@ class LlamaServer extends EventEmitter {
       status: this.status,
       binary: this.binary,
       baseUrl: this.baseUrl(),
+      port: this.port,
       modelPath: this.config.modelPath,
       lastError: this.lastError,
     };
   }
 }
 
-module.exports = { LlamaServer, resolveBinary };
+module.exports = { LlamaServer, resolveBinary, pickPort };

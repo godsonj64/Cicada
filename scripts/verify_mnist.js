@@ -8,7 +8,7 @@
 
 const path = require('path');
 const fs = require('fs');
-const configMod = require('../src/main/config');
+const { isolatedConfig, makeRunFile, cleanup } = require('./_e2e');
 const { LlamaServer } = require('../src/main/llama');
 const { Pipeline } = require('../src/main/pipeline');
 const python = require('../src/main/python');
@@ -22,11 +22,8 @@ const REQUEST =
   'predicted labels.';
 
 // Real budget: keep config.maxTokens (8192). Only bound the fix loop so the run stays finite.
-const config = {
-  ...configMod.load(),
-  serverPort: 8128,
-  maxFixIterations: 2,
-};
+// A throwaway workspace: never the user's active project.
+const config = isolatedConfig({ maxFixIterations: 2 });
 
 // Detected environment so _libNote steers the model to installed libs (no torchvision).
 const env = {
@@ -44,16 +41,12 @@ function shorten(s, n = 200) {
   return s.length > n ? s.slice(0, n) + '…' : s;
 }
 
-function runFile(file) {
-  return new Promise((resolve) => {
-    console.log('\n--- RUN OUTPUT ---');
-    let stderr = '';
-    python.run({
-      pythonPath: config.pythonPath, file, cwd: config.workspaceDir, render: true,
-      onData: (stream, text) => { if (stream === 'stderr') stderr += text; process.stdout.write(text); },
-      onExit: (code, { images }) => { console.log(`--- exit ${code}, images=${images.length} ---`); resolve({ code, images, stderr }); },
-    });
-  });
+const runOnce = makeRunFile(config);
+async function runFile(file, opts) {
+  console.log('\n--- RUN OUTPUT ---');
+  const r = await runOnce(file, opts);
+  console.log(`--- exit ${r.code}, images=${r.images.length} ---`);
+  return r;
 }
 
 (async () => {
@@ -90,6 +83,7 @@ function runFile(file) {
   // Completeness signals for the truncation fix:
   console.log(`[complete?] has __main__: ${/if\s+__name__\s*==/.test(code)} | ends-cleanly: ${!/[,(\[]\s*$/.test(code.trim())}`);
   console.log('\n--- FINAL CODE ---\n' + (code || '(none)'));
-  llama.stop();
-  setTimeout(() => process.exit(0), 1200);
+  await llama.stop();
+  cleanup(config);
+  setTimeout(() => process.exit(0), 200);
 })().catch((e) => { console.error('FATAL', e); process.exit(1); });

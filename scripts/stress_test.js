@@ -9,7 +9,7 @@
 //
 const fs = require('fs');
 const path = require('path');
-const configMod = require('../src/main/config');
+const { isolatedConfig, makeRunFile, cleanup } = require('./_e2e');
 const { LlamaServer } = require('../src/main/llama');
 const { Pipeline } = require('../src/main/pipeline');
 const { ContextMemory } = require('../src/main/memory');
@@ -19,7 +19,8 @@ const OUT = '/tmp/garm_stress';
 fs.rmSync(OUT, { recursive: true, force: true });
 fs.mkdirSync(OUT, { recursive: true });
 
-const config = { ...configMod.load(), maxTokens: 1400, maxFixIterations: 2 };
+// A throwaway workspace: never the user's active project (this battery clears memory).
+const config = isolatedConfig({ maxTokens: 1400, maxFixIterations: 2 });
 
 // A program with exponential recursion — the inpaint target.
 const FIB_BASE = `def fib(n):
@@ -53,14 +54,7 @@ const SCENARIOS = [
     instruction: 'Rewrite fib to compute the nth Fibonacci number iteratively in O(n) time instead of exponential recursion. Keep the same function name and signature.' },
 ];
 
-function runFile(file) {
-  return new Promise((resolve) => {
-    let stderr = '', stdout = '';
-    python.run({ pythonPath: config.pythonPath, file, cwd: config.workspaceDir, render: true,
-      onData: (s, t) => { if (s === 'stderr') stderr += t; else stdout += t; },
-      onExit: (code, { images }) => resolve({ code, images, stderr, stdout }) });
-  });
-}
+const runFile = makeRunFile(config, { echo: false });
 
 function shorten(s, n = 90) { return (s || '').replace(/\s+/g, ' ').trim().slice(0, n); }
 
@@ -99,7 +93,7 @@ function shorten(s, n = 90) { return (s || '').replace(/\s+/g, ' ').trim().slice
     // Capture images from the run by wrapping runFile for this scenario.
     const realRun = runFile;
     let captured = null;
-    pipeline.runFile = async (f) => { captured = await realRun(f); return captured; };
+    pipeline.runFile = async (f, o) => { captured = await realRun(f, o); return captured; };
     try {
       if (sc.kind === 'create') await pipeline.run(sc.request);
       else if (sc.kind === 'refine') await pipeline.refine(sc.change, sc.usePrevCode ? prevCode : sc.base);
@@ -149,6 +143,7 @@ function shorten(s, n = 90) { return (s || '').replace(/\s+/g, ' ').trim().slice
   console.log(`artifacts (code + plots) in: ${OUT}/<n>/`);
   console.log('memory after battery:\n' + memory.render());
 
-  llama.stop();
-  setTimeout(() => process.exit(0), 1000);
+  await llama.stop();
+  cleanup(config);
+  setTimeout(() => process.exit(0), 200);
 })().catch((e) => { console.error(e); process.exit(1); });

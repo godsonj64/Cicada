@@ -10,6 +10,7 @@ const { LlamaServer, resolveBinary } = require('./llama');
 const llamaInstaller = require('./llama-installer');
 const { Pipeline } = require('./pipeline');
 const { ContextMemory } = require('./memory');
+const { ProblemLedger } = require('./agent-memory');
 const { streamChatResilient } = require('./llm');
 const python = require('./python');
 const { Terminal } = require('./terminal');
@@ -57,6 +58,8 @@ async function detectEnv() {
 }
 let activeRun = null; // current python.run handle (pipeline or editor Run)
 let chatAbort = null; // AbortController for the in-flight chat turn
+let agentWait = null; // { cancelled } for an agent request still waiting on the model
+let pipelineInstaller = null; // (pkg) => Promise<boolean>, set up in registerIpc
 
 function send(channel, payload) {
   if (mainWindow && !mainWindow.isDestroyed()) {
@@ -115,8 +118,18 @@ function gatherProjectFiles(budget) {
   return out;
 }
 
+// How many characters of project snapshot the chat can afford. The snapshot used to be a
+// fixed 48 KB (~14k tokens) — larger than the whole default context window — so on any
+// real project llama-server rejected every chat message with "exceeds the available
+// context size". Sized to ~40% of the window instead (a hosted model's window is large).
+function chatSnapshotBudget(scale) {
+  const ctx = config.provider === 'deepseek' ? 65536 : (config.contextSize || 8192);
+  return Math.max(2000, Math.min(48 * 1024, Math.round(ctx * 3 * 0.4 * (scale || 1))));
+}
+
 // System prompt: the assistant's role + a snapshot of the whole project it can reason over.
-function buildChatSystem() {
+function buildChatSystem(budget) {
+  const filesBudget = budget || chatSnapshotBudget();
   const parts = [
     "You are Cicada's built-in coding assistant, embedded in an agentic Python IDE. You answer the " +
     "user's questions about THIS project — code, debugging, math, algorithms, ideas, and general " +
@@ -125,17 +138,33 @@ function buildChatSystem() {
     "inline or $$…$$ for display. When the user attaches selected lines, focus your answer on them.",
     '\n=== PROJECT: ' + path.basename(config.workspaceDir) + ' ===',
   ];
-  try { parts.push('File tree:\n' + treeOutline(projects.tree(config.workspaceDir), '')); } catch (_) { /* ignore */ }
-  const files = gatherProjectFiles(48 * 1024);
+  try {
+    const tree = treeOutline(projects.tree(config.workspaceDir), '');
+    parts.push('File tree:\n' + (tree.length > filesBudget * 0.15 ? tree.slice(0, Math.round(filesBudget * 0.15)) + '…\n' : tree));
+  } catch (_) { /* ignore */ }
+  const files = gatherProjectFiles(Math.round(filesBudget * 0.7));
   if (files.length) {
     parts.push('\nProject files:');
     for (const f of files) parts.push('\n--- ' + f.path + (f.truncated ? ' (truncated)' : '') + ' ---\n' + f.text);
   }
   // Uploaded data files (CSV/Excel/JSON): schemas + load hints, so chat can inspect,
   // summarize, and reason over them and propose programs built on the real data.
-  const dataCtx = datasets.formatForPrompt(datasets.list(config.workspaceDir), 6000);
+  const dataCtx = datasets.formatForPrompt(datasets.list(config.workspaceDir), Math.min(6000, Math.round(filesBudget * 0.15)));
   if (dataCtx) parts.push('\n' + dataCtx);
   return parts.join('\n');
+}
+
+// Keep the most recent turns that fit `budget` characters (always the latest user turn).
+function trimHistory(history, budget) {
+  const out = [];
+  let used = 0;
+  for (let i = history.length - 1; i >= 0; i--) {
+    const len = String(history[i].content || '').length;
+    if (out.length && used + len > budget) break;
+    out.unshift(history[i]);
+    used += len;
+  }
+  return out;
 }
 
 // Fold the current editor attachment (active file + selected lines) into the user's question.
@@ -152,35 +181,47 @@ function decorateUserMessage(text, context) {
   return bits.length ? bits.join('\n') + '\n\n' + text : text;
 }
 
-// Centralised Python runner. Streams run:* events and resolves with { code, images }.
+// Centralised Python runner. Streams run:* events and resolves with
+// { code, images, stderr, stdout, timedOut, signal, durationMs }.
 // Used by both the agentic pipeline and the editor's Run button.
+//   opts.clear   false keeps the console (pipeline re-runs append after a separator, so
+//                the traceback that triggered a repair stays visible)
+//   opts.stdin   'eof' for unattended verification runs (see python.run)
 function runFileStreaming(file, opts = {}) {
   return new Promise((resolve) => {
     if (activeRun) { try { activeRun.kill(); } catch (_) { /* ignore */ } }
-    send('run:clear', {});
-    send('run:started', { file });
+    if (opts.clear !== false) send('run:clear', {});
+    send('run:started', { file, separator: opts.clear === false });
     let stderr = '';
+    let stdout = '';
     // Rolling tail of combined output for the experiment tracker's metric parser.
     // Capped so a chatty training loop can't grow memory unbounded.
     let outTail = '';
     const TAIL_CAP = 64 * 1024;
     const startedAt = new Date().toISOString();
     const t0 = Date.now();
-    activeRun = python.run({
+    const handle = python.run({
       pythonPath: config.pythonPath,
       file,
       cwd: config.workspaceDir,
       render: true,
       timeoutMs: opts.timeoutMs || 0, // 0 = no limit (interactive editor Run); pipeline sets one
+      stdin: opts.stdin || 'pipe',
       onData: (stream, text) => {
-        if (stream === 'stderr') stderr += text;
+        if (stream === 'stderr') { stderr += text; if (stderr.length > TAIL_CAP) stderr = stderr.slice(-TAIL_CAP); }
+        else { stdout += text; if (stdout.length > TAIL_CAP) stdout = stdout.slice(-TAIL_CAP); }
         outTail += text;
         if (outTail.length > TAIL_CAP) outTail = outTail.slice(-TAIL_CAP);
         send('run:data', { stream, text });
       },
-      onExit: (code, { images }) => {
-        send('run:exit', { code });
-        if (images && images.length) {
+      onExit: (code, { images, timedOut, signal }) => {
+        // A run killed to make way for a newer one must not report into, or detach, the
+        // newer run: its late exit used to null `activeRun`, leaving the new program
+        // impossible to stop or type into, and flipped the UI back to "not running".
+        const current = activeRun === handle;
+        if (current) activeRun = null;
+        if (current) send('run:exit', { code });
+        if (current && images && images.length) {
           // pathToFileURL percent-encodes spaces etc. so paths like ".../GARM Code/..." load.
           send('run:images', { images: images.map((p) => ({ path: p, url: pathToFileURL(p).href })) });
         }
@@ -209,10 +250,10 @@ function runFileStreaming(file, opts = {}) {
           config, env: envInfo, datasets: datasets.list(config.workspaceDir),
           run: experiment || { source: opts.source || 'run', startedAt, durationMs: Date.now() - t0, exitCode: code, metrics: {} },
         }).then(() => send('repro:update', reproducibility.list(config.workspaceDir))).catch((err) => console.error('[repro] capture failed:', err.message));
-        activeRun = null;
-        resolve({ code, images, stderr });
+        resolve({ code, images, stderr, stdout, timedOut: !!timedOut, signal, durationMs: Date.now() - t0, startedAtMs: t0 });
       },
     });
+    activeRun = handle;
   });
 }
 
@@ -488,6 +529,11 @@ function getPipeline() {
   }
   pipeline.memory = memory;
   pipeline.env = envInfo;
+  pipeline.installPackage = pipelineInstaller;
+  // The per-project failure ledger follows the active project.
+  if (!pipeline.ledger || pipeline.ledger.dir !== path.join(config.workspaceDir, '.garm')) {
+    pipeline.ledger = new ProblemLedger(config.workspaceDir);
+  }
   // Make the agent aware of the project's uploaded data files (schemas + load hints).
   pipeline.datasets = datasets.formatForPrompt(datasets.list(config.workspaceDir), 6000) || null;
   return pipeline;
@@ -605,17 +651,71 @@ function registerIpc() {
     return r.filePaths[0];
   });
 
-  // Gate for every model-backed request. When the local server is down it ALSO kicks a
-  // background recovery, so "try again in a moment" is actually true rather than a
-  // dead end the user must debug through Settings.
-  const requireProvider = () => {
+  // Gate for every model-backed request. Instead of refusing while the model loads (the old
+  // "not ready yet — try again" dead end), WAIT for it: start or recover the local server
+  // if it is down, then proceed as soon as it is ready. Fails only when recovery itself
+  // fails, with the real reason.
+  const awaitProvider = async (onWait, token) => {
     if (providerReady()) return;
     if (config.provider === 'deepseek') throw new Error('Add a DeepSeek API key in Settings.');
-    if (llama && llama.status !== 'starting' && !installingLlama && !downloadingModel) startLocalLlama().catch(() => {});
-    const why = llama && llama.lastError ? ' (' + llama.lastError + ')' : '';
-    throw new Error('The local model is not ready yet' + why +
-      ' — recovery has started; watch the status pill and try again when it shows "Model ready".');
+    if (onWait) onWait();
+    const deadline = Date.now() + 20 * 60 * 1000; // covers a first-run model download
+    let kicked = false;
+    while (!providerReady()) {
+      if (token && token.cancelled) { const e = new Error('Cancelled while waiting for the model.'); e.cancelled = true; throw e; }
+      if (config.provider !== 'local') throw new Error('The inference provider changed while waiting — send the request again.');
+      const busy = installingLlama || downloadingModel || (llama && llama.status === 'starting');
+      if (!busy) {
+        if (kicked && llama && llama.status === 'error') {
+          throw new Error('The local model could not be started: ' + (llama.lastError || 'unknown error') +
+            ' — check the model and llama-server paths in Settings.');
+        }
+        if (!kicked) { kicked = true; startLocalLlama().catch(() => {}); }
+      }
+      if (Date.now() > deadline) throw new Error('Timed out waiting for the local model to start.');
+      await new Promise((r) => setTimeout(r, 400));
+    }
   };
+
+  // One agent operation at a time, including while it is still waiting for the model.
+  let agentBusy = false;
+  const agentOp = async (label, fn) => {
+    if (agentBusy || (pipeline && pipeline.running)) {
+      throw new Error('The agent is already working on a request — wait for it to finish, or press Cancel.');
+    }
+    agentBusy = true;
+    const token = { cancelled: false };
+    agentWait = token;
+    try {
+      await awaitProvider(() => send('pipeline:log', 'Waiting for the model to finish loading — your request will start automatically…'), token);
+      agentWait = null;
+      const p = getPipeline();
+      autoSnapshot(label);
+      await fn(p);
+    } finally {
+      agentBusy = false;
+      if (agentWait === token) agentWait = null;
+    }
+  };
+
+  // Install one allowlisted package for the pipeline (a generated program imported a common
+  // library that is missing). Streams into the console like the Env tab's installer.
+  const installForAgent = (pkg) => new Promise((resolve) => {
+    if (activeInstall || !python.isSafePkgSpec(pkg)) { resolve(false); return; }
+    send('env:install-start', { spec: pkg });
+    activeInstall = python.pipInstall({
+      pythonPath: config.pythonPath,
+      spec: pkg,
+      onData: (stream, text) => send('env:install-data', { stream, text }),
+      onExit: async (code) => {
+        activeInstall = null;
+        send('env:install-exit', { code, spec: pkg });
+        await detectEnv().catch(() => {});
+        resolve(code === 0);
+      },
+    });
+  });
+  pipelineInstaller = installForAgent;
 
   // Auto-checkpoint the project source before the agent rewrites anything, so any
   // pipeline operation can be undone from the History tab. Best-effort by design.
@@ -628,33 +728,26 @@ function registerIpc() {
     }
   };
 
-  ipcMain.handle('pipeline:run', async (_e, request) => {
-    requireProvider();
-    const p = getPipeline();
-    autoSnapshot('before create');
+  ipcMain.handle('pipeline:run', (_e, request) => agentOp('before create', async (p) => {
     p.filePath = path.join(config.workspaceDir, 'main.py'); // a new build writes the entry point
     await p.run(String(request || '').trim());
     return true;
-  });
-  ipcMain.handle('pipeline:refine', async (_e, { request, code, file }) => {
-    requireProvider();
-    const p = getPipeline();
-    autoSnapshot('before refine');
+  }));
+  ipcMain.handle('pipeline:refine', (_e, { request, code, file }) => agentOp('before refine', async (p) => {
     p.filePath = activeFilePath(file); // edits apply to the file you have open
     await p.refine(String(request || '').trim(), code || '');
     return true;
-  });
-  ipcMain.handle('pipeline:inpaint', async (_e, { request, code, selection, file }) => {
-    requireProvider();
-    const p = getPipeline();
-    autoSnapshot('before edit selection');
+  }));
+  ipcMain.handle('pipeline:inpaint', (_e, { request, code, selection, file }) => agentOp('before edit selection', async (p) => {
     p.filePath = activeFilePath(file);
     await p.inpaint(String(request || '').trim(), code || '', selection || {});
     return true;
-  });
+  }));
   ipcMain.handle('pipeline:cancel', () => {
+    if (agentWait) agentWait.cancelled = true; // still waiting for the model to load
     if (pipeline) pipeline.cancel();
     if (activeRun) { try { activeRun.kill(); } catch (_) { /* already gone */ } } // also stop a program the pipeline is running
+    if (activeInstall && pipeline && pipeline.running) { try { activeInstall.kill(); } catch (_) { /* ignore */ } }
     return true;
   });
 
@@ -662,32 +755,52 @@ function registerIpc() {
   // carry an editor attachment (active file + selected lines). We prepend a system prompt holding
   // a snapshot of the project, then stream the reply back over chat:delta / chat:done.
   ipcMain.handle('chat:send', async (_e, { messages }) => {
-    requireProvider();
-    const history = Array.isArray(messages) ? messages.slice() : [];
-    const last = history[history.length - 1];
-    if (last && last.role === 'user') last.content = decorateUserMessage(last.content, last.context);
-    const chatMessages = [{ role: 'system', content: buildChatSystem() }]
-      .concat(history.map((m) => ({ role: m.role, content: m.content })));
-
     if (chatAbort) { try { chatAbort.abort(); } catch (_) { /* ignore */ } }
     const myAbort = new AbortController();
     chatAbort = myAbort;
-    const backend = activeBackend();
     try {
-      const full = await streamChatResilient(backend.baseUrl, {
-        messages: chatMessages,
-        temperature: 0.4,
-        topP: 0.95,
-        maxTokens: 8192,
-        signal: myAbort.signal,
-        apiKey: backend.apiKey,
-        model: backend.model,
-        onDelta: (chunk) => send('chat:delta', { text: chunk }),
-        // chat:done re-renders from the final text, so a mid-stream retry only shows a
-        // brief duplicate while streaming — the finished bubble is always clean.
-        onRetry: () => send('chat:delta', { text: '\n\n_(connection dropped — retrying…)_\n\n' }),
-      });
-      send('chat:done', { text: full });
+      // Wait for the model rather than refusing while it loads (cancellable from the UI).
+      const token = { get cancelled() { return myAbort.signal.aborted; } };
+      await awaitProvider(null, token);
+
+      const history = Array.isArray(messages) ? messages.slice() : [];
+      const last = history[history.length - 1];
+      if (last && last.role === 'user') last.content = decorateUserMessage(last.content, last.context);
+      const backend = activeBackend();
+      const ctxTokens = config.provider === 'deepseek' ? 65536 : (config.contextSize || 8192);
+
+      // Build the prompt to fit the window; if the server still says it does not fit (the
+      // chars→tokens estimate is approximate), shrink the snapshot to its reported size.
+      let scale = 1;
+      for (let attempt = 0; ; attempt++) {
+        const system = buildChatSystem(chatSnapshotBudget(scale));
+        const turns = trimHistory(history.map((m) => ({ role: m.role, content: m.content })), Math.round(ctxTokens * 3 * 0.3 * scale));
+        const chatMessages = [{ role: 'system', content: system }].concat(turns);
+        const promptTokens = Math.ceil(chatMessages.reduce((n, m) => n + m.content.length, 0) / 3);
+        try {
+          const full = await streamChatResilient(backend.baseUrl, {
+            messages: chatMessages,
+            temperature: 0.4,
+            topP: 0.95,
+            maxTokens: Math.max(1024, Math.min(8192, ctxTokens - promptTokens - 128)),
+            signal: myAbort.signal,
+            apiKey: backend.apiKey,
+            model: backend.model,
+            onDelta: (chunk) => send('chat:delta', { text: chunk }),
+            // chat:done re-renders from the final text, so a mid-stream retry only shows a
+            // brief duplicate while streaming — the finished bubble is always clean.
+            onRetry: () => send('chat:delta', { text: '\n\n_(connection dropped — retrying…)_\n\n' }),
+          });
+          send('chat:done', { text: full });
+          break;
+        } catch (err) {
+          if (err && err.code === 'context_overflow' && attempt < 2 && !myAbort.signal.aborted) {
+            scale *= err.nPrompt && err.nCtx ? Math.max(0.2, (err.nCtx * 0.6) / err.nPrompt) : 0.5;
+            continue;
+          }
+          throw err;
+        }
+      }
     } catch (err) {
       if (myAbort.signal.aborted) send('chat:done', { text: '', aborted: true });
       else send('chat:error', { message: err.message });
