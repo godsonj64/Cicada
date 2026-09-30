@@ -43,7 +43,8 @@ contextBridge.exposeInMainWorld('garm', {
   },
   chat: {
     // messages: [{ role, content, context? }] — the last user turn may carry an editor attachment.
-    send: (messages) => ipcRenderer.invoke('chat:send', { messages }),
+    // id: the conversation turn, echoed on chat:delta / chat:done / chat:error.
+    send: (messages, id) => ipcRenderer.invoke('chat:send', { messages, id }),
     cancel: () => ipcRenderer.invoke('chat:cancel'),
   },
   // First-run signup + "star us" prompt bookkeeping.

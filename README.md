@@ -162,7 +162,7 @@ block.
   can inspect, summarize, and reason over your data — and build analytics programs, dashboards,
   reports, transformations, pipelines, visualizations, or ML workflows directly from the real
   files (e.g. drop a sales CSV, then ask for "a full sales analytics report with charts").
-- **Chat side panel** — ask about your project in a collapsible, resizable panel on the right (toggle in the top bar or ⌘⇧L; ⌘L in the editor opens it with the selected lines attached). It waits for the model to load instead of refusing, and sizes the project snapshot to the context window.
+- **Chat side panel** — ask about your project in a collapsible, resizable panel on the right (toggle in the top bar or ⌘⇧L; ⌘L in the editor opens it with the selected lines attached). It waits for the model to load instead of refusing, and sizes the project snapshot to the context window. Each conversation belongs to one project: switching projects starts a fresh chat about the new one.
 - Console with live stdout/stderr streaming and a stdin box for interactive programs.
 - Render panel that displays any images/plots the program produces (matplotlib figures
   are auto-captured via a headless harness).
@@ -270,6 +270,7 @@ node scripts/runner_test.js          # program execution: nested imports, plot c
 node scripts/stream_test.js          # model client: dropped streams, error frames, context overflow, stalls
 node scripts/llama_server_test.js    # llama-server lifecycle with a fake server: restart race, busy port, crash restart
 node scripts/config_test.js          # settings: GARM_HOME isolation and the one-time context-size migration
+node scripts/chat_context_test.js    # what chat is told about the active project (new/empty/built)
 node scripts/llm_test.js             # response parsing incl. the <think>-leak guard and fence parsing
 node scripts/inpaint_test.js         # deterministic splice/indent + py_compile checks
 node scripts/memory_test.js          # persistent context-memory checks

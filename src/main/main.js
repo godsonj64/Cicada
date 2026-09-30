@@ -11,6 +11,7 @@ const llamaInstaller = require('./llama-installer');
 const { Pipeline } = require('./pipeline');
 const { ContextMemory } = require('./memory');
 const { ProblemLedger } = require('./agent-memory');
+const { buildChatSystem, trimHistory, decorateUserMessage } = require('./chat-context');
 const { streamChatResilient } = require('./llm');
 const python = require('./python');
 const { Terminal } = require('./terminal');
@@ -77,47 +78,6 @@ function activeBackend() {
   return { baseUrl: llama ? llama.baseUrl() : '', apiKey: null, model: null };
 }
 
-// Render the project file tree as an indented text outline for the chat context.
-function treeOutline(nodes, prefix) {
-  let out = '';
-  for (const n of nodes || []) {
-    out += prefix + (n.type === 'dir' ? '📁 ' : '') + n.name + '\n';
-    if (n.type === 'dir' && n.children && n.children.length) out += treeOutline(n.children, prefix + '  ');
-  }
-  return out;
-}
-
-// Gather readable source files under the workspace (skipping binaries / big files / vendored
-// dirs), up to a total character budget, so chat has broad project awareness without blowing
-// the context window.
-function gatherProjectFiles(budget) {
-  const SKIP_DIRS = new Set(['__pycache__', '.git', 'node_modules', '.venv', 'venv', 'data', 'dist', 'out']);
-  const out = [];
-  let used = 0;
-  const walk = (dir, rel) => {
-    let entries = [];
-    try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch (_) { return; }
-    for (const e of entries) {
-      if (used >= budget) return;
-      if (e.name.startsWith('.') || e.name.startsWith('_garm_')) continue;
-      if (e.isSymbolicLink()) continue;
-      const abs = path.join(dir, e.name);
-      const r = rel ? rel + '/' + e.name : e.name;
-      if (e.isDirectory()) { if (!SKIP_DIRS.has(e.name)) walk(abs, r); continue; }
-      let st; try { st = fs.statSync(abs); } catch (_) { continue; }
-      if (st.size > 64 * 1024) continue;
-      let buf; try { buf = fs.readFileSync(abs); } catch (_) { continue; }
-      if (buf.includes(0)) continue; // binary
-      const text = buf.toString('utf8');
-      const slice = text.slice(0, Math.max(0, budget - used));
-      used += slice.length;
-      out.push({ path: r, text: slice, truncated: slice.length < text.length });
-    }
-  };
-  walk(config.workspaceDir, '');
-  return out;
-}
-
 // How many characters of project snapshot the chat can afford. The snapshot used to be a
 // fixed 48 KB (~14k tokens) — larger than the whole default context window — so on any
 // real project llama-server rejected every chat message with "exceeds the available
@@ -125,60 +85,6 @@ function gatherProjectFiles(budget) {
 function chatSnapshotBudget(scale) {
   const ctx = config.provider === 'deepseek' ? 65536 : (config.contextSize || 8192);
   return Math.max(2000, Math.min(48 * 1024, Math.round(ctx * 3 * 0.4 * (scale || 1))));
-}
-
-// System prompt: the assistant's role + a snapshot of the whole project it can reason over.
-function buildChatSystem(budget) {
-  const filesBudget = budget || chatSnapshotBudget();
-  const parts = [
-    "You are Cicada's built-in coding assistant, embedded in an agentic Python IDE. You answer the " +
-    "user's questions about THIS project — code, debugging, math, algorithms, ideas, and general " +
-    "questions. Be accurate and concise. Format every reply in Markdown: put code in fenced blocks " +
-    "with a language tag (```python), use `inline code` for identifiers, and write math with $…$ " +
-    "inline or $$…$$ for display. When the user attaches selected lines, focus your answer on them.",
-    '\n=== PROJECT: ' + path.basename(config.workspaceDir) + ' ===',
-  ];
-  try {
-    const tree = treeOutline(projects.tree(config.workspaceDir), '');
-    parts.push('File tree:\n' + (tree.length > filesBudget * 0.15 ? tree.slice(0, Math.round(filesBudget * 0.15)) + '…\n' : tree));
-  } catch (_) { /* ignore */ }
-  const files = gatherProjectFiles(Math.round(filesBudget * 0.7));
-  if (files.length) {
-    parts.push('\nProject files:');
-    for (const f of files) parts.push('\n--- ' + f.path + (f.truncated ? ' (truncated)' : '') + ' ---\n' + f.text);
-  }
-  // Uploaded data files (CSV/Excel/JSON): schemas + load hints, so chat can inspect,
-  // summarize, and reason over them and propose programs built on the real data.
-  const dataCtx = datasets.formatForPrompt(datasets.list(config.workspaceDir), Math.min(6000, Math.round(filesBudget * 0.15)));
-  if (dataCtx) parts.push('\n' + dataCtx);
-  return parts.join('\n');
-}
-
-// Keep the most recent turns that fit `budget` characters (always the latest user turn).
-function trimHistory(history, budget) {
-  const out = [];
-  let used = 0;
-  for (let i = history.length - 1; i >= 0; i--) {
-    const len = String(history[i].content || '').length;
-    if (out.length && used + len > budget) break;
-    out.unshift(history[i]);
-    used += len;
-  }
-  return out;
-}
-
-// Fold the current editor attachment (active file + selected lines) into the user's question.
-function decorateUserMessage(text, context) {
-  if (!context) return text;
-  const bits = [];
-  if (context.file) bits.push('[Active file: ' + context.file + ']');
-  const s = context.selection;
-  if (s && s.text) {
-    const lang = context.language || 'python';
-    bits.push('[Selected lines ' + s.startLine + '–' + s.endLine + ' of ' + (context.file || 'the file') +
-      ']\n```' + lang + '\n' + s.text + '\n```');
-  }
-  return bits.length ? bits.join('\n') + '\n\n' + text : text;
 }
 
 // Centralised Python runner. Streams run:* events and resolves with
@@ -552,6 +458,8 @@ function getTerminal() {
 // Switch the active project: repoint the workspace dir, per-project memory, terminal
 // cwd and pipeline. The renderer reloads its file tree + editor from the return value.
 function switchProject(dir) {
+  // A chat answer still streaming is about the old project: stop it.
+  if (chatAbort) { try { chatAbort.abort(); } catch (_) { /* ignore */ } }
   config = configMod.save({ workspaceDir: dir });
   fs.mkdirSync(config.workspaceDir, { recursive: true });
   memory = new ContextMemory(config.workspaceDir);
@@ -754,7 +662,9 @@ function registerIpc() {
   // Context-aware chat agent. The renderer sends the whole conversation; the last user turn may
   // carry an editor attachment (active file + selected lines). We prepend a system prompt holding
   // a snapshot of the project, then stream the reply back over chat:delta / chat:done.
-  ipcMain.handle('chat:send', async (_e, { messages }) => {
+  // `id` names the conversation turn; every chat:* event carries it back so the renderer can
+  // ignore a late reply that belongs to a conversation it has since reset (project switch).
+  ipcMain.handle('chat:send', async (_e, { messages, id }) => {
     if (chatAbort) { try { chatAbort.abort(); } catch (_) { /* ignore */ } }
     const myAbort = new AbortController();
     chatAbort = myAbort;
@@ -773,7 +683,7 @@ function registerIpc() {
       // chars→tokens estimate is approximate), shrink the snapshot to its reported size.
       let scale = 1;
       for (let attempt = 0; ; attempt++) {
-        const system = buildChatSystem(chatSnapshotBudget(scale));
+        const system = buildChatSystem({ workspaceDir: config.workspaceDir, budget: chatSnapshotBudget(scale), memory });
         const turns = trimHistory(history.map((m) => ({ role: m.role, content: m.content })), Math.round(ctxTokens * 3 * 0.3 * scale));
         const chatMessages = [{ role: 'system', content: system }].concat(turns);
         const promptTokens = Math.ceil(chatMessages.reduce((n, m) => n + m.content.length, 0) / 3);
@@ -786,12 +696,12 @@ function registerIpc() {
             signal: myAbort.signal,
             apiKey: backend.apiKey,
             model: backend.model,
-            onDelta: (chunk) => send('chat:delta', { text: chunk }),
+            onDelta: (chunk) => send('chat:delta', { id, text: chunk }),
             // chat:done re-renders from the final text, so a mid-stream retry only shows a
             // brief duplicate while streaming — the finished bubble is always clean.
-            onRetry: () => send('chat:delta', { text: '\n\n_(connection dropped — retrying…)_\n\n' }),
+            onRetry: () => send('chat:delta', { id, text: '\n\n_(connection dropped — retrying…)_\n\n' }),
           });
-          send('chat:done', { text: full });
+          send('chat:done', { id, text: full });
           break;
         } catch (err) {
           if (err && err.code === 'context_overflow' && attempt < 2 && !myAbort.signal.aborted) {
@@ -802,8 +712,8 @@ function registerIpc() {
         }
       }
     } catch (err) {
-      if (myAbort.signal.aborted) send('chat:done', { text: '', aborted: true });
-      else send('chat:error', { message: err.message });
+      if (myAbort.signal.aborted) send('chat:done', { id, text: '', aborted: true });
+      else send('chat:error', { id, message: err.message });
     } finally {
       if (chatAbort === myAbort) chatAbort = null;
     }

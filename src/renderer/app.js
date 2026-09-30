@@ -1383,6 +1383,7 @@
     loadDatasets(); // refresh the Data tab for the newly opened project
     loadGitHubStatus(); // repo state is per-project too
     $('#console').innerHTML = '';
+    resetChat(); // a conversation is about one project — never carry it into another
   }
 
   function switchToProject(path) {
@@ -1429,6 +1430,9 @@
   var chatStreaming = false;
   var chatRaw = '';         // accumulating assistant text for the in-flight reply
   var chatStreamEl = null;  // the assistant bubble currently being streamed into
+  var chatReqSeq = 0;       // id of the latest chat request; events for any other id are stale
+  var chatReqId = null;
+  var chatEmptyHTML = '';   // the empty-state markup, restored when the conversation resets
 
   function openChat(sel) {
     setChatPanel(true, true);
@@ -1496,8 +1500,26 @@
     var bar = $('#chat-attach'); bar.classList.add('hidden'); bar.innerHTML = '';
   }
 
+  // Start a fresh conversation (on a project switch). The old turns described another
+  // project: sent along with the new project's files, they won — asked for an overview of a
+  // brand-new project, the model described the previous one. Any reply still streaming is
+  // cancelled, and a late one is ignored by its request id.
+  function resetChat() {
+    if (chatStreaming) garm.chat.cancel();
+    chatReqId = null;
+    chatTurns = [];
+    chatStreaming = false; setChatSendUI(false);
+    chatStreamEl = null; chatRaw = '';
+    clearChatAttach();
+    var body = $('#chat-body');
+    if (chatEmptyHTML) body.innerHTML = chatEmptyHTML;
+    var title = body.querySelector('.chat-empty-title');
+    var name = ($('#project-name') && $('#project-name').textContent) || '';
+    if (title) title.textContent = name ? 'Ask about ' + name : 'Ask Cicada';
+  }
+
   function chatBubble(role) {
-    var empty = $('#chat-empty'); if (empty) empty.remove();
+    var empty = $('#chat-empty'); if (empty) { chatEmptyHTML = empty.outerHTML; empty.remove(); }
     var wrap = document.createElement('div');
     wrap.className = 'chat-msg chat-' + role;
     var body = document.createElement('div');
@@ -1540,7 +1562,10 @@
       : '<span class="chat-note">Waiting for the model to finish loading…</span>';
     chatStreaming = true; setChatSendUI(true);
 
-    garm.chat.send(chatTurns).catch(function (err) {
+    var reqId = ++chatReqSeq;
+    chatReqId = reqId;
+    garm.chat.send(chatTurns, reqId).catch(function (err) {
+      if (reqId !== chatReqId) return; // the conversation was reset meanwhile
       chatStreaming = false; setChatSendUI(false);
       if (chatStreamEl) chatStreamEl.innerHTML = '<span class="out-err">' + escapeHtml(err.message) + '</span>';
       chatStreamEl = null;
@@ -1559,8 +1584,10 @@
     });
     autoGrow('#chat-input', 24, 140);
 
+    // A reply that belongs to an earlier conversation (reset by a project switch) is dropped.
+    var stale = function (p) { return p && p.id != null && p.id !== chatReqId; };
     garm.on('chat:delta', function (p) {
-      if (!chatStreaming || !chatStreamEl) return;
+      if (stale(p) || !chatStreaming || !chatStreamEl) return;
       chatRaw += (p && p.text) || '';
       var parts = splitThink(chatRaw);
       if (!parts.answer && parts.think) chatStreamEl.innerHTML = '<span class="chat-thinking">Thinking…</span>';
@@ -1568,6 +1595,7 @@
       $('#chat-body').scrollTop = $('#chat-body').scrollHeight;
     });
     garm.on('chat:done', function (p) {
+      if (stale(p)) return;
       chatStreaming = false; setChatSendUI(false);
       var raw = (p && p.text) || chatRaw;
       var parts = splitThink(raw);
@@ -1581,6 +1609,7 @@
       $('#chat-body').scrollTop = $('#chat-body').scrollHeight;
     });
     garm.on('chat:error', function (p) {
+      if (stale(p)) return;
       chatStreaming = false; setChatSendUI(false);
       if (chatStreamEl) chatStreamEl.innerHTML = '<span class="out-err">' + escapeHtml((p && p.message) || 'Chat failed.') + '</span>';
       chatStreamEl = null;
