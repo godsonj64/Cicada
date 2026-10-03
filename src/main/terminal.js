@@ -16,7 +16,7 @@ class Terminal extends EventEmitter {
     super();
     this.cwd = cwd || os.homedir();
     this.isWindows = process.platform === 'win32';
-    this.shell = this.isWindows ? 'powershell.exe' : (process.env.SHELL || '/bin/zsh');
+    this.shell = this.isWindows ? windowsPowerShell() : (process.env.SHELL || '/bin/zsh');
     this.proc = null;
     this.pythonPath = null; // when set, the terminal "activates" this interpreter
   }
@@ -31,7 +31,15 @@ class Terminal extends EventEmitter {
     const env = { ...process.env };
     if (!this.pythonPath) return env;
     const binDir = path.dirname(this.pythonPath);
-    env.PATH = `${binDir}${path.delimiter}${env.PATH || ''}`;
+    // Windows env keys are case-insensitive but a copied object is not: the key is
+    // usually `Path`, and writing a separate `PATH` would shadow it (Node keeps `PATH`),
+    // dropping System32 and making the shell itself fail to spawn (ENOENT).
+    const pathKey = Object.keys(env).find((k) => k.toUpperCase() === 'PATH') || 'PATH';
+    const dirs = [binDir];
+    // A non-venv Windows install keeps pip & friends in Scripts\ beside python.exe.
+    const scriptsDir = path.join(binDir, 'Scripts');
+    if (this.isWindows && fs.existsSync(scriptsDir)) dirs.push(scriptsDir);
+    env[pathKey] = [...dirs, env[pathKey] || ''].join(path.delimiter);
     // If the interpreter lives in a venv (pyvenv.cfg one level up), activate it.
     const prefix = path.dirname(binDir);
     try {
@@ -108,6 +116,13 @@ class Terminal extends EventEmitter {
     try { spawn('taskkill', ['/pid', String(this.proc.pid), '/T', '/F'], { windowsHide: true }); }
     catch (_) { try { this.proc.kill(); } catch (_) { /* ignore */ } }
   }
+}
+
+// Absolute path to Windows PowerShell so the terminal doesn't depend on PATH lookup.
+function windowsPowerShell() {
+  const root = process.env.SystemRoot || process.env.windir || 'C:\\Windows';
+  const exe = path.join(root, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
+  return fs.existsSync(exe) ? exe : 'powershell.exe';
 }
 
 function shellQuote(s) {
